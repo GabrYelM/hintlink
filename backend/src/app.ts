@@ -8,6 +8,7 @@ import { authRoutes } from './modules/auth/auth.routes.js'
 import { subjectsRoutes } from './modules/subjects/subjects.routes.js'
 import { academicRecordsRoutes } from './modules/academic-records/academic-records.routes.js'
 import { requestsRoutes } from './modules/requests/requests.routes.js'
+import { sessionsRoutes } from './modules/sessions/sessions.routes.js'
 
 export const app = fastify({
   logger: process.env.NODE_ENV !== 'test',
@@ -29,6 +30,7 @@ app.register(authRoutes, { prefix: '/api/v1' })
 app.register(subjectsRoutes, { prefix: '/api/v1' })
 app.register(academicRecordsRoutes, { prefix: '/api/v1' })
 app.register(requestsRoutes, { prefix: '/api/v1' })
+app.register(sessionsRoutes, { prefix: '/api/v1' })
 
 // Rota de Health Check
 app.get('/health', async () => {
