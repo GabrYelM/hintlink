@@ -147,17 +147,36 @@ Em atendimento às diretrizes acadêmicas do projeto, **toda a stack e ferrament
 
 ## 📋 Pré-requisitos e Execução Local
 
-*(Esta seção será atualizada assim que o repositório receber a base de código do projeto)*
+### 1️⃣ Pré-requisitos
+- **Node.js LTS** (v20+ ou v24+) instalado
+- **Docker Desktop** instalado e em execução
+
+### 2️⃣ Inicialização Completa em 1 Comando
+
+Para rodar todo o ecossistema (banco PostgreSQL, Redis, Back-end e Front-end simultaneamente):
 
 ```bash
-# Clone este repositório
+# 1. Clone o repositório
 git clone https://github.com/GabrYelM/hintlink.git
-
-# Acesse o diretório
 cd hintlink
 
-# Instruções de instalação e ambiente em breve
+# 2. Suba o banco de dados e o cache com o Docker
+npm run services:up
+
+# 3. Inicie o Back-end e o Front-end juntos no mesmo terminal:
+npm run dev
 ```
+
+O comando unificado `npm run dev` inicializa:
+- 🔵 **Back-end:** `http://localhost:3333` (Swagger em `/docs` e WebSockets em `/ws`)
+- 🟢 **Front-end:** `http://localhost:3000`
+
+### 🛠️ Scripts Úteis Disponíveis na Raiz
+- `npm run dev`: Inicia Back-end e Front-end em paralelo com logs coloridos.
+- `npm run services:up`: Sobe os containers do PostgreSQL e Redis (`docker compose up -d`).
+- `npm run services:down`: Desliga os containers do Docker.
+- `npm run dev:back`: Inicia apenas o Back-end.
+- `npm run dev:front`: Inicia apenas o Front-end.
 
 ---
 

@@ -1,0 +1,18 @@
+{
+  "name": "hintlink-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monorepo workspace para a plataforma Hintlink (Back-end e Front-end)",
+  "scripts": {
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue.bold,green.bold\" \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "dev:back": "npm run dev --prefix backend",
+    "dev:front": "npm run dev --prefix frontend",
+    "services:up": "docker compose up -d",
+    "services:down": "docker compose stop",
+    "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
+    "build:all": "npm run build --prefix backend && npm run build --prefix frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
