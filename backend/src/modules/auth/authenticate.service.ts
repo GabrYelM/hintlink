@@ -4,7 +4,7 @@ import { UsersRepository } from '../users/users.repository.js'
 import { AppError } from '../../shared/errors/app-error.js'
 
 interface AuthenticateRequest {
-  email: string
+  login: string // Pode ser e-mail ou username
   password: string
 }
 
@@ -15,8 +15,8 @@ interface AuthenticateResponse {
 export class AuthenticateService {
   constructor(private usersRepository: UsersRepository) {}
 
-  async execute({ email, password }: AuthenticateRequest): Promise<AuthenticateResponse> {
-    const user = await this.usersRepository.findByEmail(email)
+  async execute({ login, password }: AuthenticateRequest): Promise<AuthenticateResponse> {
+    const user = await this.usersRepository.findByEmailOrUsername(login)
 
     if (!user) {
       throw new AppError('Credenciais inválidas.', 401)

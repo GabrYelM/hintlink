@@ -12,6 +12,7 @@ import axios from 'axios'
 interface UserProfile {
   id: string
   name: string
+  username?: string
   email: string
   cpf: string
   role: 'STUDENT' | 'TUTOR' | 'ADMIN'
@@ -25,7 +26,9 @@ export default function Home() {
 
   // Form States
   const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
+  const [loginIdentifier, setLoginIdentifier] = useState('')
   const [cpf, setCpf] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -62,6 +65,7 @@ export default function Home() {
     try {
       const response = await api.post('/auth/register', {
         name,
+        username: username.trim() || undefined,
         email,
         cpf,
         password,
@@ -89,7 +93,7 @@ export default function Home() {
 
     try {
       const response = await api.post('/auth/login', {
-        email,
+        login: loginIdentifier,
         password,
       })
 
@@ -266,13 +270,13 @@ export default function Home() {
                 {activeTab === 'LOGIN' ? (
                   <form onSubmit={handleLogin} className="space-y-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1.5">E-mail Universitário</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">E-mail ou Login de Usuário</label>
                       <input
-                        type="email"
+                        type="text"
                         required
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="seu.email@ufabc.edu.br"
+                        value={loginIdentifier}
+                        onChange={(e) => setLoginIdentifier(e.target.value)}
+                        placeholder="seu.email@ufabc.edu.br ou seu_usuario"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-brand-light border border-slate-200 text-sm text-brand-dark placeholder:text-slate-400 focus:outline-none focus:border-brand-blue"
                       />
                     </div>
@@ -326,20 +330,32 @@ export default function Home() {
                       </button>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Nome Completo</label>
-                      <input
-                        type="text"
-                        required
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Nome Sobrenome"
-                        className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-sm text-brand-dark placeholder:text-slate-400 focus:outline-none focus:border-brand-blue"
-                      />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Nome Completo</label>
+                        <input
+                          type="text"
+                          required
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          placeholder="Nome Sobrenome"
+                          className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-sm text-brand-dark placeholder:text-slate-400 focus:outline-none focus:border-brand-blue"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Login / Usuário (Opcional)</label>
+                        <input
+                          type="text"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          placeholder="ex: gabryel_m"
+                          className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-sm text-brand-dark placeholder:text-slate-400 focus:outline-none focus:border-brand-blue"
+                        />
+                      </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">E-mail</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">E-mail Universitário</label>
                       <input
                         type="email"
                         required

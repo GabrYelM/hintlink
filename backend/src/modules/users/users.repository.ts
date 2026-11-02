@@ -3,6 +3,7 @@ import { prisma } from '../../shared/database/prisma.js'
 
 export interface CreateUserData {
   name: string
+  username?: string
   email: string
   cpf: string
   passwordHash: string
@@ -13,6 +14,23 @@ export class UsersRepository {
   async findByEmail(email: string): Promise<User | null> {
     return prisma.user.findUnique({
       where: { email },
+    })
+  }
+
+  async findByUsername(username: string): Promise<User | null> {
+    return prisma.user.findUnique({
+      where: { username },
+    })
+  }
+
+  async findByEmailOrUsername(identifier: string): Promise<User | null> {
+    return prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: identifier },
+          { username: identifier.toLowerCase() },
+        ],
+      },
     })
   }
 

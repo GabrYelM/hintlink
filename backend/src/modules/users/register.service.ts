@@ -6,6 +6,7 @@ import { formatCPF, validateCPF } from '../../shared/utils/cpf-validator.js'
 
 interface RegisterUserRequest {
   name: string
+  username?: string
   email: string
   cpf: string
   password: string
@@ -19,11 +20,23 @@ interface RegisterUserResponse {
 export class RegisterUserService {
   constructor(private usersRepository: UsersRepository) {}
 
-  async execute({ name, email, cpf, password, role }: RegisterUserRequest): Promise<RegisterUserResponse> {
+  async execute({ name, username, email, cpf, password, role }: RegisterUserRequest): Promise<RegisterUserResponse> {
     const cleanCPF = formatCPF(cpf)
 
     if (!validateCPF(cleanCPF)) {
       throw new AppError('CPF inválido.', 400)
+    }
+
+    if (username) {
+      const cleanUsername = username.trim().toLowerCase()
+      if (cleanUsername.length < 3) {
+        throw new AppError('O login de usuário deve ter no mínimo 3 caracteres.', 400)
+      }
+
+      const userWithSameUsername = await this.usersRepository.findByUsername(cleanUsername)
+      if (userWithSameUsername) {
+        throw new AppError('Este login de usuário já está em uso.', 409)
+      }
     }
 
     const userWithSameEmail = await this.usersRepository.findByEmail(email)
@@ -40,6 +53,7 @@ export class RegisterUserService {
 
     const user = await this.usersRepository.create({
       name,
+      username: username ? username.trim().toLowerCase() : undefined,
       email,
       cpf: cleanCPF,
       passwordHash,

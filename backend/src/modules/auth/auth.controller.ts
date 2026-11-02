@@ -7,19 +7,21 @@ import { AuthenticateService } from './authenticate.service.js'
 export async function register(request: FastifyRequest, reply: FastifyReply) {
   const registerBodySchema = z.object({
     name: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres'),
+    username: z.string().min(3, 'O login deve ter no mínimo 3 caracteres').optional(),
     email: z.string().email('E-mail em formato inválido'),
     cpf: z.string().min(11, 'CPF incompleto'),
     password: z.string().min(6, 'A senha deve ter no mínimo 6 caracteres'),
     role: z.enum(['STUDENT', 'TUTOR']).default('STUDENT'),
   })
 
-  const { name, email, cpf, password, role } = registerBodySchema.parse(request.body)
+  const { name, username, email, cpf, password, role } = registerBodySchema.parse(request.body)
 
   const usersRepository = new UsersRepository()
   const registerUserService = new RegisterUserService(usersRepository)
 
   const { user } = await registerUserService.execute({
     name,
+    username,
     email,
     cpf,
     password,
@@ -39,17 +41,17 @@ export async function register(request: FastifyRequest, reply: FastifyReply) {
 
 export async function authenticate(request: FastifyRequest, reply: FastifyReply) {
   const authenticateBodySchema = z.object({
-    email: z.string().email('E-mail em formato inválido'),
+    login: z.string().min(1, 'Informe seu e-mail ou nome de usuário'),
     password: z.string().min(1, 'Informe a senha'),
   })
 
-  const { email, password } = authenticateBodySchema.parse(request.body)
+  const { login, password } = authenticateBodySchema.parse(request.body)
 
   const usersRepository = new UsersRepository()
   const authenticateService = new AuthenticateService(usersRepository)
 
   const { user } = await authenticateService.execute({
-    email,
+    login,
     password,
   })
 
