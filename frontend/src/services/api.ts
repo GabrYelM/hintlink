@@ -1,7 +1,23 @@
 import axios from 'axios'
 
+function getInitialBaseURL() {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL
+  if (typeof window !== 'undefined') {
+    return `http://${window.location.hostname}:3333/api/v1`
+  }
+  return 'http://localhost:3333/api/v1'
+}
+
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333/api/v1',
+  baseURL: getInitialBaseURL(),
+})
+
+// Interceptor para garantir que requisições feitas no navegador usem o hostname atual (IP da rede local)
+api.interceptors.request.use((config) => {
+  if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_API_URL) {
+    config.baseURL = `http://${window.location.hostname}:3333/api/v1`
+  }
+  return config
 })
 
 // Anexa o token JWT automaticamente se estiver salvo no navegador
