@@ -7,6 +7,7 @@ import { AcademicRecordsRepository } from '../academic-records/academic-records.
 import { CreateTutoringRequestService } from './create-request.service.js'
 import { FetchOpenRequestsService } from './fetch-open-requests.service.js'
 import { AcceptRequestService } from './accept-request.service.js'
+import { connectionManager } from '../../shared/websocket/connection-manager.js'
 
 export async function createRequest(request: FastifyRequest, reply: FastifyReply) {
   const createRequestBodySchema = z.object({
@@ -37,6 +38,18 @@ export async function createRequest(request: FastifyRequest, reply: FastifyReply
     description,
     durationMinutes,
     offeredPrice,
+  })
+
+  // 🚀 DISPARO EM TEMPO REAL VIA WEBSOCKET (EFEITO UBER):
+  // Notifica instantaneamente todos os monitores (TUTOR) online com os detalhes do novo chamado
+  connectionManager.broadcastToRole('TUTOR', 'NEW_TUTORING_REQUEST', {
+    requestId: tutoringRequest.id,
+    subjectId: tutoringRequest.subjectId,
+    topic: tutoringRequest.topic,
+    durationMinutes: tutoringRequest.durationMinutes,
+    offeredPrice: tutoringRequest.offeredPrice,
+    studentId: tutoringRequest.studentId,
+    createdAt: tutoringRequest.createdAt,
   })
 
   return reply.status(201).send({
@@ -90,6 +103,21 @@ export async function acceptRequest(request: FastifyRequest, reply: FastifyReply
   const { session, escrow, request: updatedRequest } = await acceptRequestService.execute({
     requestId: id,
     tutorId: request.user.sub,
+  })
+
+  // 🚀 DISPARO EM TEMPO REAL VIA WEBSOCKET:
+  // 1. Notifica o aluno dono do chamado que um monitor aceitou a dúvida e envia o link/ID da sala de aula
+  connectionManager.sendToUser(updatedRequest.studentId, 'REQUEST_ACCEPTED', {
+    sessionId: session.id,
+    requestId: updatedRequest.id,
+    tutorId: session.tutorId,
+    status: session.status,
+    message: 'Um monitor aceitou sua dúvida! Entrando na sala...',
+  })
+
+  // 2. Avisa os outros monitores para removerem o chamado do feed deles (já foi pego)
+  connectionManager.broadcastToRole('TUTOR', 'REQUEST_TAKEN', {
+    requestId: updatedRequest.id,
   })
 
   return reply.status(200).send({

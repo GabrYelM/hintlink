@@ -11,6 +11,7 @@ import { subjectsRoutes } from './modules/subjects/subjects.routes.js'
 import { academicRecordsRoutes } from './modules/academic-records/academic-records.routes.js'
 import { requestsRoutes } from './modules/requests/requests.routes.js'
 import { sessionsRoutes } from './modules/sessions/sessions.routes.js'
+import { websocketRoutes } from './shared/websocket/websocket.routes.js'
 
 export const app = fastify({
   logger: process.env.NODE_ENV !== 'test',
@@ -66,6 +67,7 @@ app.register(fastifySwaggerUi, {
 })
 
 // Rotas da Aplicação
+app.register(websocketRoutes)
 app.register(authRoutes, { prefix: '/api/v1' })
 app.register(subjectsRoutes, { prefix: '/api/v1' })
 app.register(academicRecordsRoutes, { prefix: '/api/v1' })
