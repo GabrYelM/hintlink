@@ -1,0 +1,341 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { api } from '@/services/api'
+import { Bell, CheckCircle2, Clock, DollarSign, BookOpen, UserCheck, AlertTriangle } from 'lucide-react'
+import axios from 'axios'
+
+interface OpenRequest {
+  id: string
+  topic: string
+  description?: string
+  durationMinutes: number
+  offeredPrice: string
+  createdAt: string
+  student: {
+    id: string
+    name: string
+    rating: number
+  }
+  subject: {
+    id: string
+    code: string
+    name: string
+  }
+}
+
+interface TutorRecord {
+  id: string
+  isApproved: boolean
+  grade?: number
+  subject: {
+    id: string
+    code: string
+    name: string
+  }
+}
+
+interface AllSubject {
+  id: string
+  code: string
+  name: string
+}
+
+interface TutorUser {
+  id: string
+  name: string
+  email: string
+  cpf: string
+  role: 'STUDENT' | 'TUTOR' | 'ADMIN'
+  rating: number
+  totalReviews: number
+}
+
+export function TutorDashboard({ user }: { user: TutorUser }) {
+  const [openRequests, setOpenRequests] = useState<OpenRequest[]>([])
+  const [mySubjects, setMySubjects] = useState<TutorRecord[]>([])
+  const [allSubjects, setAllSubjects] = useState<AllSubject[]>([])
+  const [selectedSubjectToAdd, setSelectedSubjectToAdd] = useState('')
+  const [tutorGrade, setTutorGrade] = useState(8.5)
+  const [loadingAction, setLoadingAction] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [reqRes, mySubRes, allSubRes] = await Promise.all([
+          api.get('/requests/open'),
+          api.get('/tutors/subjects'),
+          api.get('/subjects'),
+        ])
+        setOpenRequests(reqRes.data.requests || [])
+        setMySubjects(mySubRes.data.records || [])
+        setAllSubjects(allSubRes.data.subjects || [])
+        if (allSubRes.data.subjects?.length > 0) {
+          setSelectedSubjectToAdd(allSubRes.data.subjects[0].id)
+        }
+      } catch (err) {
+        console.error('Erro ao carregar dados do dashboard do monitor:', err)
+      }
+    }
+    loadData()
+  }, [])
+
+  async function handleAddSubject(e: React.FormEvent) {
+    e.preventDefault()
+    setFeedback(null)
+
+    try {
+      const response = await api.post('/tutors/subjects', {
+        subjectId: selectedSubjectToAdd,
+        grade: Number(tutorGrade),
+      })
+
+      const added = allSubjects.find((s) => s.id === selectedSubjectToAdd)
+      if (added) {
+        setMySubjects((prev) => [
+          ...prev,
+          {
+            id: response.data.academicRecord.id,
+            isApproved: true,
+            grade: Number(tutorGrade),
+            subject: added,
+          },
+        ])
+      }
+
+      setFeedback({
+        type: 'success',
+        message: 'Matéria vinculada com sucesso ao seu histórico de monitor!',
+      })
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        setFeedback({
+          type: 'error',
+          message: err.response?.data?.message || 'Falha ao vincular matéria.',
+        })
+      } else {
+        setFeedback({
+          type: 'error',
+          message: 'Erro inesperado ao vincular matéria.',
+        })
+      }
+    }
+  }
+
+  async function handleAcceptRequest(requestId: string) {
+    setLoadingAction(requestId)
+    setFeedback(null)
+
+    try {
+      await api.patch(`/requests/${requestId}/accept`)
+      setFeedback({
+        type: 'success',
+        message: 'Você aceitou a monitoria! A sala virtual e a custódia Pix foram ativadas.',
+      })
+      // Remove da lista de chamados abertos
+      setOpenRequests((prev) => prev.filter((r) => r.id !== requestId))
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        setFeedback({
+          type: 'error',
+          message: err.response?.data?.message || 'Erro ao aceitar chamado. Verifique seu histórico.',
+        })
+      } else {
+        setFeedback({
+          type: 'error',
+          message: 'Erro inesperado ao aceitar chamado.',
+        })
+      }
+    } finally {
+      setLoadingAction(null)
+    }
+  }
+
+  return (
+    <div className="space-y-8">
+      {/* Top Welcome Banner */}
+      <div className="bg-gradient-to-r from-brand-blue to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div>
+          <span className="inline-block px-3 py-1 rounded-full text-xs font-bold bg-brand-yellow/20 text-brand-yellow border border-brand-yellow/30 mb-2">
+            👨‍🏫 Painel do Monitor
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-black">
+            Pronto para atender, {user.name.split(' ')[0]}?
+          </h2>
+          <p className="text-sm text-white/80 mt-1 max-w-xl">
+            Aceite chamados estilo Uber de matérias aprovadas no seu histórico. Os pagamentos Pix caem em custódia garantida.
+          </p>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="bg-white/10 backdrop-blur-md px-4 py-3 rounded-2xl border border-white/20 text-center">
+            <span className="block text-xs uppercase tracking-wider text-white/70 font-semibold">Reputação</span>
+            <span className="text-lg font-black text-brand-yellow">{user.rating} ★ ({user.totalReviews})</span>
+          </div>
+          <div className="bg-white/10 backdrop-blur-md px-4 py-3 rounded-2xl border border-white/20 text-center">
+            <span className="block text-xs uppercase tracking-wider text-white/70 font-semibold">Status</span>
+            <span className="text-xs font-bold text-emerald-400 flex items-center justify-center gap-1 mt-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              Modo Plantão Ativo
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {feedback && (
+        <div
+          className={`p-4 rounded-2xl text-xs font-bold flex items-center gap-2 ${
+            feedback.type === 'success'
+              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+              : 'bg-rose-50 text-rose-700 border border-rose-200'
+          }`}
+        >
+          {feedback.type === 'success' ? (
+            <CheckCircle2 className="w-5 h-5 shrink-0" />
+          ) : (
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+          )}
+          <span>{feedback.message}</span>
+        </div>
+      )}
+
+      <div className="grid lg:grid-cols-12 gap-8 items-start">
+        {/* Feed de Chamados Abertos (Estilo Uber) */}
+        <div className="lg:col-span-8 space-y-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-extrabold text-lg text-brand-blue flex items-center gap-2">
+              <Bell className="w-5 h-5 text-brand-yellow" />
+              Chamados de Alunos em Tempo Real
+            </h3>
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-200 text-slate-700">
+              {openRequests.length} chamado(s) aberto(s)
+            </span>
+          </div>
+
+          {openRequests.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center text-slate-500">
+              <CheckCircle2 className="w-10 h-10 mx-auto text-emerald-500 mb-3" />
+              <p className="font-bold text-slate-700 text-base">Nenhum chamado aberto na fila no momento</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Fique atento! Novas dúvidas abertas por alunos aparecerão aqui instantaneamente.
+              </p>
+            </div>
+          ) : (
+            openRequests.map((req) => (
+              <div
+                key={req.id}
+                className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:border-brand-yellow/60 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-5"
+              >
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-brand-blue text-white">
+                      {req.subject.code}
+                    </span>
+                    <span className="text-xs text-slate-600 font-medium">
+                      {req.subject.name}
+                    </span>
+                  </div>
+                  <h4 className="font-black text-lg text-brand-dark">{req.topic}</h4>
+                  {req.description && (
+                    <p className="text-xs text-slate-500 line-clamp-2">{req.description}</p>
+                  )}
+                  <div className="flex items-center gap-4 text-xs text-slate-500 pt-1 font-mono">
+                    <span className="flex items-center gap-1 font-semibold text-slate-700">
+                      <UserCheck className="w-3.5 h-3.5 text-brand-purple" />
+                      {req.student.name} ({req.student.rating} ★)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      {req.durationMinutes} min
+                    </span>
+                    <span className="flex items-center gap-1 font-bold text-emerald-600 text-sm">
+                      <DollarSign className="w-4 h-4" />
+                      R$ {Number(req.offeredPrice).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="shrink-0">
+                  <button
+                    onClick={() => handleAcceptRequest(req.id)}
+                    disabled={loadingAction === req.id}
+                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-brand-yellow hover:bg-amber-400 text-brand-dark font-extrabold text-sm shadow-md shadow-brand-yellow/30 transition-all disabled:opacity-50"
+                  >
+                    {loadingAction === req.id ? 'Aceitando...' : 'Aceitar Corrida (Atender)'}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Gerenciamento de Matérias Aptas / Histórico */}
+        <div className="lg:col-span-4 space-y-6">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+            <h3 className="font-extrabold text-base text-brand-blue mb-4 flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-brand-purple" />
+              Suas Matérias Aptas
+            </h3>
+
+            {mySubjects.length === 0 ? (
+              <p className="text-xs text-slate-400 mb-4">
+                Você ainda não cadastrou nenhuma matéria do seu histórico acadêmico.
+              </p>
+            ) : (
+              <div className="space-y-2 mb-4">
+                {mySubjects.map((sub) => (
+                  <div
+                    key={sub.id}
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-brand-light border border-slate-200 text-xs"
+                  >
+                    <span className="font-bold text-brand-blue">{sub.subject.code}</span>
+                    <span className="text-slate-600 truncate max-w-[140px]">{sub.subject.name}</span>
+                    <span className="font-mono text-emerald-600 font-bold">Nota: {sub.grade || 'Aprovado'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Form para vincular matéria */}
+            <form onSubmit={handleAddSubject} className="pt-4 border-t border-slate-100 space-y-3">
+              <span className="block text-xs font-bold text-slate-700">Vincular Nova Matéria</span>
+              <select
+                value={selectedSubjectToAdd}
+                onChange={(e) => setSelectedSubjectToAdd(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-xs text-brand-dark focus:outline-none focus:border-brand-blue"
+              >
+                {allSubjects.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.code} - {s.name}
+                  </option>
+                ))}
+              </select>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Nota no Histórico
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="5"
+                  max="10"
+                  value={tutorGrade}
+                  onChange={(e) => setTutorGrade(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-xs text-brand-dark focus:outline-none focus:border-brand-blue font-bold"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-xl bg-brand-blue hover:bg-slate-800 text-white font-bold text-xs transition-colors"
+              >
+                + Adicionar ao Histórico
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -1,9 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { api, setAuthToken } from '@/services/api'
 import { HintlinkLogo } from '@/components/HintlinkLogo'
-import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2 } from 'lucide-react'
+import { StudentDashboard } from '@/components/StudentDashboard'
+import { TutorDashboard } from '@/components/TutorDashboard'
+import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2, LogOut } from 'lucide-react'
 import axios from 'axios'
 
 interface UserProfile {
@@ -29,6 +31,25 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [loggedUser, setLoggedUser] = useState<UserProfile | null>(null)
+  const [initializing, setInitializing] = useState(true)
+
+  // Verifica se o usuário já estava logado ao abrir o site
+  useEffect(() => {
+    async function checkAuth() {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('@hintlink:token') : null
+      if (token) {
+        try {
+          const response = await api.get('/me')
+          setLoggedUser(response.data.user)
+        } catch {
+          setAuthToken(null)
+          setLoggedUser(null)
+        }
+      }
+      setInitializing(false)
+    }
+    checkAuth()
+  }, [])
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
@@ -47,7 +68,6 @@ export default function Home() {
 
       setAuthToken(response.data.token)
       setLoggedUser(response.data.user)
-      setSuccess(`Conta criada com sucesso como ${role === 'STUDENT' ? 'Aluno' : 'Monitor'}!`)
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         setError(err.response?.data?.message || 'Falha ao realizar cadastro.')
@@ -73,7 +93,6 @@ export default function Home() {
 
       setAuthToken(response.data.token)
       setLoggedUser(response.data.user)
-      setSuccess(`Bem-vindo de volta, ${response.data.user.name}!`)
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         setError(err.response?.data?.message || 'Credenciais inválidas.')
@@ -85,121 +104,124 @@ export default function Home() {
     }
   }
 
+  function handleLogout() {
+    setAuthToken(null)
+    setLoggedUser(null)
+  }
+
+  if (initializing) {
+    return (
+      <div className="min-h-screen bg-brand-light flex items-center justify-center">
+        <HintlinkLogo size={48} className="animate-pulse" />
+      </div>
+    )
+  }
+
   return (
     <main className="min-h-screen bg-brand-light text-brand-dark flex flex-col justify-between selection:bg-brand-yellow selection:text-brand-dark">
       {/* Top Navbar */}
       <header className="border-b border-slate-200 bg-white/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-18 py-3 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-18 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <HintlinkLogo size={40} />
+            <HintlinkLogo size={38} />
             <div className="flex flex-col">
               <span className="text-2xl font-black tracking-tight text-brand-blue leading-none">
                 Hintlink
               </span>
-              <span className="text-[10px] font-medium text-brand-yellow tracking-wider uppercase mt-0.5">
+              <span className="text-[10px] font-bold text-brand-yellow tracking-wider uppercase mt-0.5">
                 by Hefesto Company
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-3 text-xs font-mono">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-blue/5 text-brand-blue border border-brand-blue/15 font-semibold">
-              <span className="h-2 w-2 rounded-full bg-brand-yellow animate-pulse"></span>
-              UFABC • Conexão Ativa
-            </span>
+
+          <div className="flex items-center gap-4">
+            {loggedUser ? (
+              <div className="flex items-center gap-3">
+                <div className="text-right hidden sm:block">
+                  <span className="block text-xs font-bold text-brand-blue">{loggedUser.name}</span>
+                  <span className="block text-[11px] font-semibold text-brand-purple">
+                    {loggedUser.role === 'STUDENT' ? '🎓 Aluno' : '👨‍🏫 Monitor'}
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  title="Sair da Conta"
+                  className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-500 hover:text-rose-600 transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-blue/5 text-brand-blue border border-brand-blue/15 text-xs font-semibold">
+                <span className="h-2 w-2 rounded-full bg-brand-yellow animate-pulse"></span>
+                UFABC • Conexão Ativa
+              </span>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Hero & Auth Section */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12 lg:py-20 flex-1 grid lg:grid-cols-12 gap-12 items-center">
-        {/* Left Column: Proposta de Valor Conforme Brand Guideline */}
-        <div className="lg:col-span-7 space-y-6">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-brand-purple/10 border border-brand-purple/20 text-xs font-semibold text-brand-purple">
-            <BookOpen className="w-4 h-4 text-brand-purple" />
-            <span>Uma plataforma de conexão de conhecimento para universitários</span>
-          </div>
-
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-[1.1] text-brand-blue">
-            A ajuda que você precisa, de <span className="text-brand-purple">universitário</span> para <span className="text-brand-yellow">universitário</span>.
-          </h1>
-
-          <p className="text-slate-600 text-base sm:text-lg max-w-xl leading-relaxed">
-            Dúvida na matéria? Conecte-se rapidamente com quem já domina o conteúdo. Atendimentos imediatos sob demanda com segurança acadêmica e transacional.
-          </p>
-
-          <div className="grid sm:grid-cols-3 gap-4 pt-6 border-t border-slate-200">
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-xl bg-brand-yellow/15 text-brand-yellow">
-                <Clock className="w-5 h-5 shrink-0" />
+      {/* Main Content: Se logado, renderiza o Dashboard respectivo. Se não, renderiza a Landing/Auth */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 flex-1 w-full">
+        {loggedUser ? (
+          loggedUser.role === 'STUDENT' ? (
+            <StudentDashboard user={loggedUser} />
+          ) : (
+            <TutorDashboard user={loggedUser} />
+          )
+        ) : (
+          <div className="py-8 lg:py-16 grid lg:grid-cols-12 gap-12 items-center">
+            {/* Left Column: Proposta de Valor Conforme Brand Guideline */}
+            <div className="lg:col-span-7 space-y-6">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-brand-purple/10 border border-brand-purple/20 text-xs font-semibold text-brand-purple">
+                <BookOpen className="w-4 h-4 text-brand-purple" />
+                <span>Uma plataforma de conexão de conhecimento para universitários</span>
               </div>
-              <div>
-                <h4 className="text-sm font-bold text-brand-blue">Ágil</h4>
-                <p className="text-xs text-slate-500">Atendimento sob demanda, imediato ou agendado.</p>
-              </div>
-            </div>
 
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-xl bg-brand-purple/15 text-brand-purple">
-                <ShieldCheck className="w-5 h-5 shrink-0" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-brand-blue">Inteligente</h4>
-                <p className="text-xs text-slate-500">Monitores aprovados na grade curricular.</p>
-              </div>
-            </div>
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-[1.1] text-brand-blue">
+                A ajuda que você precisa, de <span className="text-brand-purple">universitário</span> para <span className="text-brand-yellow">universitário</span>.
+              </h1>
 
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-xl bg-brand-blue/10 text-brand-blue">
-                <CheckCircle2 className="w-5 h-5 shrink-0" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-brand-blue">Colaborativa</h4>
-                <p className="text-xs text-slate-500">Valorização real da troca de conhecimento.</p>
-              </div>
-            </div>
-          </div>
-        </div>
+              <p className="text-slate-600 text-base sm:text-lg max-w-xl leading-relaxed">
+                Dúvida na matéria? Conecte-se rapidamente com quem já domina o conteúdo. Atendimentos imediatos sob demanda com segurança acadêmica e transacional.
+              </p>
 
-        {/* Right Column: Card de Autenticação / Perfil */}
-        <div className="lg:col-span-5">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-xl shadow-slate-200/50 relative overflow-hidden">
-            {loggedUser ? (
-              <div className="space-y-6 text-center py-4">
-                <div className="h-16 w-16 mx-auto rounded-full bg-brand-purple/10 text-brand-purple flex items-center justify-center font-bold text-2xl border border-brand-purple/20">
-                  {loggedUser.name.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold text-brand-blue">{loggedUser.name}</h3>
-                  <p className="text-xs text-slate-500 font-mono mt-1">{loggedUser.email}</p>
-                  <span className="inline-block mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-brand-purple/10 text-brand-purple border border-brand-purple/20">
-                    {loggedUser.role === 'STUDENT' ? '🎓 Aluno' : '👨‍🏫 Monitor'}
-                  </span>
-                </div>
-
-                <div className="bg-brand-light p-4 rounded-xl border border-slate-200 text-left text-xs space-y-2 font-mono">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Avaliação:</span>
-                    <span className="text-brand-yellow font-bold">{loggedUser.rating} ★ ({loggedUser.totalReviews} avaliações)</span>
+              <div className="grid sm:grid-cols-3 gap-4 pt-6 border-t border-slate-200">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-brand-yellow/15 text-brand-yellow">
+                    <Clock className="w-5 h-5 shrink-0" />
                   </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>ID do Usuário:</span>
-                    <span className="text-brand-blue truncate max-w-[180px] font-semibold">{loggedUser.id}</span>
+                  <div>
+                    <h4 className="text-sm font-bold text-brand-blue">Ágil</h4>
+                    <p className="text-xs text-slate-500">Atendimento sob demanda, imediato ou agendado.</p>
                   </div>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setAuthToken(null)
-                    setLoggedUser(null)
-                  }}
-                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
-                >
-                  Sair da Conta
-                </button>
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-brand-purple/15 text-brand-purple">
+                    <ShieldCheck className="w-5 h-5 shrink-0" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-brand-blue">Inteligente</h4>
+                    <p className="text-xs text-slate-500">Monitores aprovados na grade curricular.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-brand-blue/10 text-brand-blue">
+                    <CheckCircle2 className="w-5 h-5 shrink-0" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-brand-blue">Colaborativa</h4>
+                    <p className="text-xs text-slate-500">Valorização real da troca de conhecimento.</p>
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div>
-                {/* Abas Login / Cadastro */}
+            </div>
+
+            {/* Right Column: Formulário de Autenticação */}
+            <div className="lg:col-span-5">
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-xl shadow-slate-200/50 relative overflow-hidden">
                 <div className="flex bg-brand-light p-1 rounded-xl mb-6 border border-slate-200">
                   <button
                     onClick={() => { setActiveTab('LOGIN'); setError(null); setSuccess(null) }}
@@ -262,7 +284,7 @@ export default function Home() {
                       disabled={loading}
                       className="w-full mt-2 py-3 rounded-xl bg-brand-yellow hover:bg-amber-400 text-brand-dark font-extrabold text-sm flex items-center justify-center gap-2 shadow-md shadow-brand-yellow/30 transition-all disabled:opacity-50"
                     >
-                      {loading ? 'Entrando...' : 'Começar Agora'}
+                      {loading ? 'Entrando...' : 'Acessar Plataforma'}
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </form>
@@ -331,7 +353,7 @@ export default function Home() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">Senha</label>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">Senha</label>
                         <input
                           type="password"
                           required
@@ -354,9 +376,9 @@ export default function Home() {
                   </form>
                 )}
               </div>
-            )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Footer */}
