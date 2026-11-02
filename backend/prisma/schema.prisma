@@ -1,0 +1,175 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  TUTOR
+  ADMIN
+}
+
+enum RequestStatus {
+  OPEN
+  MATCHED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum SessionStatus {
+  ACTIVE
+  FINISHED
+  DISPUTED
+  CANCELLED
+}
+
+enum EscrowStatus {
+  PENDING_PAYMENT
+  HELD
+  RELEASED_TO_TUTOR
+  REFUNDED_TO_STUDENT
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED_REFUND
+  RESOLVED_PAID_TUTOR
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  cpf          String   @unique
+  passwordHash String
+  role         Role     @default(STUDENT)
+  avatarUrl    String?
+  rating       Float    @default(5.0)
+  totalReviews Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relacionamentos
+  academicRecords   AcademicRecord[]
+  requestsAsStudent TutoringRequest[] @relation("StudentRequests")
+  sessionsAsStudent TutoringSession[] @relation("StudentSessions")
+  sessionsAsTutor   TutoringSession[] @relation("TutorSessions")
+  openedTickets     DisputeTicket[]   @relation("UserOpenedTickets")
+
+  @@map("users")
+}
+
+model Subject {
+  id          String   @id @default(uuid())
+  code        String   @unique // Ex: "MAT001"
+  name        String   // Ex: "Cálculo Diferencial e Integral I"
+  aliases     String[] // Ex: ["Bases Matemáticas", "Cálculo 1"]
+  department  String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relacionamentos
+  academicRecords AcademicRecord[]
+  requests        TutoringRequest[]
+
+  @@map("subjects")
+}
+
+model AcademicRecord {
+  id               String    @id @default(uuid())
+  userId           String
+  subjectId        String
+  grade            Float?
+  proofDocumentUrl String?
+  isApproved       Boolean   @default(false)
+  validatedAt      DateTime?
+  createdAt        DateTime  @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+  @@map("academic_records")
+}
+
+model TutoringRequest {
+  id              String        @id @default(uuid())
+  studentId       String
+  subjectId       String
+  topic           String        // Ex: "Teorema Fundamental do Cálculo"
+  description     String?
+  durationMinutes Int           @default(30)
+  offeredPrice    Decimal       @db.Decimal(10, 2)
+  status          RequestStatus @default(OPEN)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  student User             @relation("StudentRequests", fields: [studentId], references: [id])
+  subject Subject          @relation(fields: [subjectId], references: [id])
+  session TutoringSession?
+
+  @@map("tutoring_requests")
+}
+
+model TutoringSession {
+  id              String        @id @default(uuid())
+  requestId       String        @unique
+  studentId       String
+  tutorId         String
+  status          SessionStatus @default(ACTIVE)
+  startedAt       DateTime      @default(now())
+  endedAt         DateTime?
+  durationMinutes Int
+  whiteboardData  Json?
+  studentRating   Int?          // 1 a 5
+  studentFeedback String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  request TutoringRequest    @relation(fields: [requestId], references: [id])
+  student User               @relation("StudentSessions", fields: [studentId], references: [id])
+  tutor   User               @relation("TutorSessions", fields: [tutorId], references: [id])
+  escrow  EscrowTransaction?
+  ticket  DisputeTicket?
+
+  @@map("tutoring_sessions")
+}
+
+model EscrowTransaction {
+  id           String       @id @default(uuid())
+  sessionId    String       @unique
+  amount       Decimal      @db.Decimal(10, 2)
+  pixCode      String?      // Código Copia e Cola EMV
+  status       EscrowStatus @default(PENDING_PAYMENT)
+  paidAt       DateTime?
+  releasedAt   DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  session TutoringSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("escrow_transactions")
+}
+
+model DisputeTicket {
+  id             String        @id @default(uuid())
+  sessionId      String        @unique
+  openedByUserId String
+  reason         String
+  status         DisputeStatus @default(OPEN)
+  adminNotes     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  session  TutoringSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  openedBy User            @relation("UserOpenedTickets", fields: [openedByUserId], references: [id])
+
+  @@map("dispute_tickets")
+}

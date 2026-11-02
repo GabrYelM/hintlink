@@ -151,7 +151,7 @@ Em atendimento às diretrizes acadêmicas do projeto, **toda a stack e ferrament
 
 ```bash
 # Clone este repositório
-git clone https://github.com/seu-usuario/hintlink.git
+git clone https://github.com/GabrYelM/hintlink.git
 
 # Acesse o diretório
 cd hintlink
