@@ -3,9 +3,11 @@ import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import websocket from '@fastify/websocket'
 import { ZodError } from 'zod'
+import { AppError } from './shared/errors/app-error.js'
+import { authRoutes } from './modules/auth/auth.routes.js'
 
 export const app = fastify({
-  logger: true,
+  logger: process.env.NODE_ENV !== 'test',
 })
 
 // Plugins
@@ -18,6 +20,9 @@ app.register(jwt, {
 })
 
 app.register(websocket)
+
+// Rotas da Aplicação
+app.register(authRoutes, { prefix: '/api/v1' })
 
 // Rota de Health Check
 app.get('/health', async () => {
@@ -32,8 +37,14 @@ app.get('/health', async () => {
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
     return reply.status(400).send({
-      message: 'Validation error.',
+      message: 'Erro de validação.',
       issues: error.format(),
+    })
+  }
+
+  if (error instanceof AppError) {
+    return reply.status(error.statusCode).send({
+      message: error.message,
     })
   }
 
