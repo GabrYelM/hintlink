@@ -32,6 +32,11 @@ coverage/
 *.sln
 *.sw?
 
+# Arquivos de Design e Mídia Pesados
+*.pdf
+*.ai
+*.psd
+
 # Arquivos de Sistema Operacional
 .DS_Store
 Thumbs.db

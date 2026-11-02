@@ -9,8 +9,16 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        brand: {
+          blue: "#163A5F",     // Confiabilidade, inteligência e tecnologia
+          purple: "#7048A8",   // Transformação, inovação e conhecimento
+          yellow: "#F5B942",   // Sinergia, dinamismo e prontidão
+          dark: "#18202A",     // Grafite escuro para contraste e clareza
+          light: "#F7F9FC",    // Grafite claro para fundos e legibilidade
+        },
+      },
+      fontFamily: {
+        sans: ["var(--font-inter)", "sans-serif"],
       },
     },
   },
