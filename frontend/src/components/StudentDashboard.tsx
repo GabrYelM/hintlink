@@ -12,9 +12,12 @@ import {
   ArrowRight,
   Video,
   Sparkles,
+  MessageSquare,
 } from 'lucide-react'
 import axios from 'axios'
 import { VirtualRoom } from './VirtualRoom'
+import { SessionChatModal, ChatMessage } from './SessionChatModal'
+import { useHintlinkSocket } from '@/hooks/use-socket'
 
 interface Subject {
   id: string
@@ -48,9 +51,31 @@ interface StudentUser {
 interface ActiveSessionData {
   id: string
   status: string
-  studentId?: string
-  tutorId?: string
-  durationMinutes?: number
+  durationMinutes: number
+  request?: {
+    topic: string
+    description?: string
+    offeredPrice: number | string
+    subject?: {
+      code: string
+      name: string
+    }
+  }
+  student?: {
+    id: string
+    name: string
+    rating: number
+  }
+  tutor?: {
+    id: string
+    name: string
+    rating: number
+  }
+  escrow?: {
+    amount: number | string
+    status: string
+  }
+  chatMessages?: ChatMessage[]
 }
 
 export function StudentDashboard({ user }: { user: StudentUser }) {
@@ -64,10 +89,15 @@ export function StudentDashboard({ user }: { user: StudentUser }) {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [myRequests, setMyRequests] = useState<TutoringRequestItem[]>([])
 
-  // Active Session & Virtual Room
+  // Active Session, Chat de Agendamento & Virtual Room
   const [activeSession, setActiveSession] = useState<ActiveSessionData | null>(null)
+  const [isChatModalOpen, setIsChatModalOpen] = useState(false)
   const [isVirtualRoomOpen, setIsVirtualRoomOpen] = useState(false)
   const [isDemoRoomOpen, setIsDemoRoomOpen] = useState(false)
+
+  // WebSocket Connection
+  const token = typeof window !== 'undefined' ? localStorage.getItem('@hintlink:token') : null
+  const { sendMessage, subscribe } = useHintlinkSocket(token)
 
   const loadData = useCallback(async () => {
     try {
@@ -96,6 +126,32 @@ export function StudentDashboard({ user }: { user: StudentUser }) {
     loadData()
   }, [loadData])
 
+  // Escuta eventos em tempo real do WebSocket (sem refresh!)
+  useEffect(() => {
+    const unsubscribe = subscribe((msg) => {
+      // 🚀 Um monitor aceitou a dúvida do aluno!
+      if (msg.type === 'REQUEST_ACCEPTED') {
+        loadData()
+        setIsChatModalOpen(true)
+        setFeedback({
+          type: 'success',
+          message: 'Um monitor acabou de aceitar seu chamado! Abrindo o chat de agendamento.',
+        })
+      }
+
+      // Sessão concluída
+      if (msg.type === 'CALL_ENDED_BY_STUDENT') {
+        loadData()
+        setIsVirtualRoomOpen(false)
+        setIsChatModalOpen(false)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [subscribe, loadData])
+
   async function handleCreateRequest(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
@@ -112,7 +168,7 @@ export function StudentDashboard({ user }: { user: StudentUser }) {
 
       setFeedback({
         type: 'success',
-        message: 'Chamado aberto com sucesso! Monitores notificados em tempo real.',
+        message: 'Chamado aberto com sucesso! Monitores notificados instantaneamente sem necessidade de refresh.',
       })
       setTopic('')
       setDescription('')
@@ -183,23 +239,36 @@ export function StudentDashboard({ user }: { user: StudentUser }) {
         </div>
       </div>
 
-      {/* Alerta de Sessão Ativa */}
+      {/* Alerta de Sessão Ativa com Botões para Chat de Agendamento ou Vídeo */}
       {activeSession && (
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-2xl p-4 text-white shadow-lg flex items-center justify-between">
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-2xl p-4 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="h-3 w-3 rounded-full bg-white animate-ping"></span>
+            <span className="h-3 w-3 rounded-full bg-white animate-ping shrink-0"></span>
             <div>
-              <h4 className="font-extrabold text-sm">Seu monitor já está na sala de aula!</h4>
-              <p className="text-xs text-white/80">Entre na chamada para iniciar sua monitoria com gravação de segurança.</p>
+              <h4 className="font-extrabold text-sm">
+                Seu chamado foi aceito por {activeSession.tutor?.name || 'um monitor'}!
+              </h4>
+              <p className="text-xs text-white/80">
+                Alinhe o horário pelo chat pré-chamada ou entre direto na sala de aula.
+              </p>
             </div>
           </div>
-          <button
-            onClick={() => setIsVirtualRoomOpen(true)}
-            className="px-5 py-2.5 rounded-xl bg-white text-emerald-800 font-black text-xs hover:bg-slate-100 shadow-md flex items-center gap-2 transition-all"
-          >
-            <Video className="w-4 h-4" />
-            <span>Entrar na Sala Virtual</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setIsChatModalOpen(true)}
+              className="px-4 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-extrabold text-xs flex items-center gap-1.5 transition-all"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Chat & Agendamento</span>
+            </button>
+            <button
+              onClick={() => setIsVirtualRoomOpen(true)}
+              className="px-4 py-2 rounded-xl bg-white text-emerald-800 font-black text-xs hover:bg-slate-100 shadow-md flex items-center gap-1.5 transition-all"
+            >
+              <Video className="w-4 h-4" />
+              <span>Entrar no Vídeo</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -390,12 +459,29 @@ export function StudentDashboard({ user }: { user: StudentUser }) {
         </div>
       </div>
 
-      {/* Virtual Room Modal */}
+      {/* Chat de Agendamento Pré-Chamada */}
+      {isChatModalOpen && activeSession && (
+        <SessionChatModal
+          session={activeSession}
+          currentUser={user}
+          sendMessage={sendMessage}
+          subscribe={subscribe}
+          onStartCall={() => {
+            setIsChatModalOpen(false)
+            setIsVirtualRoomOpen(true)
+          }}
+          onClose={() => setIsChatModalOpen(false)}
+        />
+      )}
+
+      {/* Virtual Room Modal (Chamada Real ou Modo Teste) */}
       {(isVirtualRoomOpen || isDemoRoomOpen) && (
         <VirtualRoom
           sessionId={activeSession?.id || 'demo-ufabc-room-1'}
           currentUser={user}
           isDemoMode={isDemoRoomOpen}
+          sendMessage={sendMessage}
+          subscribe={subscribe}
           onClose={() => {
             setIsVirtualRoomOpen(false)
             setIsDemoRoomOpen(false)

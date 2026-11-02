@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '@/services/api'
 import {
   Video,
@@ -23,8 +23,10 @@ import {
   Send,
   X,
   RefreshCw,
+  LogOut,
 } from 'lucide-react'
 import axios from 'axios'
+import { WebSocketMessage } from '@/hooks/use-socket'
 
 interface VirtualRoomProps {
   sessionId: string
@@ -34,26 +36,37 @@ interface VirtualRoomProps {
     role: 'STUDENT' | 'TUTOR' | 'ADMIN'
   }
   isDemoMode?: boolean
+  sendMessage?: (type: string, payload?: unknown, sessionId?: string) => void
+  subscribe?: (callback: (msg: WebSocketMessage) => void) => () => void
   onClose: () => void
 }
 
 interface ChatMessage {
   id: string
+  senderId?: string
   senderName: string
   senderRole: string
   text: string
   time: string
 }
 
-export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClose }: VirtualRoomProps) {
+export function VirtualRoom({
+  sessionId,
+  currentUser,
+  isDemoMode = false,
+  sendMessage,
+  subscribe,
+  onClose,
+}: VirtualRoomProps) {
   // Media State
   const [isVideoEnabled, setIsVideoEnabled] = useState(true)
   const [isAudioEnabled, setIsAudioEnabled] = useState(true)
   const [isScreenSharing, setIsScreenSharing] = useState(false)
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false)
   const [audioVolumeLevel, setAudioVolumeLevel] = useState(0) // 0 to 100 for VU meter
+  const [hasRemoteStream, setHasRemoteStream] = useState(false)
 
-  // View Mode: 'SPLIT' | 'VIDEO_FOCUS' | 'WHITEBOARD_FOCUS'
+  // View Mode: 'CALL' | 'WHITEBOARD'
   const [activeTab, setActiveTab] = useState<'CALL' | 'WHITEBOARD'>('CALL')
   const [isChatOpen, setIsChatOpen] = useState(false)
 
@@ -68,7 +81,7 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recordedChunksRef = useRef<Blob[]>([])
 
-  // Finish / Dispute Modal State
+  // Finish / Dispute Modal State (Exclusivo do Aluno)
   const [isEndModalOpen, setIsEndModalOpen] = useState(false)
   const [doubtResolved, setDoubtResolved] = useState<boolean | null>(null)
   const [studentRating, setStudentRating] = useState<number>(5)
@@ -76,6 +89,7 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
   const [disputeReason, setDisputeReason] = useState('')
   const [isSubmittingFinish, setIsSubmittingFinish] = useState(false)
   const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null)
+  const [autoCloseAlert, setAutoCloseAlert] = useState<string | null>(null)
 
   // Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -91,15 +105,182 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
 
   // Refs
   const localVideoRef = useRef<HTMLVideoElement | null>(null)
-  const screenVideoRef = useRef<HTMLVideoElement | null>(null)
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null)
   const whiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
   const isDrawingRef = useRef(false)
   const lastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
 
-  // Initialize Media Streams & Continuous Pre-Recording
+  const isStudent = currentUser.role === 'STUDENT'
+
+  // Initialize WebRTC Peer Connection
+  const createPeerConnection = useCallback(() => {
+    if (peerConnectionRef.current) return peerConnectionRef.current
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    })
+
+    // Anexa trilhas locais se já disponíveis
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => {
+        pc.addTrack(track, localStreamRef.current!)
+      })
+    }
+
+    // Recebe trilhas remotas do parceiro
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current && event.streams[0]) {
+        remoteVideoRef.current.srcObject = event.streams[0]
+        setHasRemoteStream(true)
+      }
+    }
+
+    // Envia ICE candidates para o parceiro via WebSocket
+    pc.onicecandidate = (event) => {
+      if (event.candidate && sendMessage && !isDemoMode) {
+        sendMessage('RTC_ICE_CANDIDATE', event.candidate, sessionId)
+      }
+    }
+
+    peerConnectionRef.current = pc
+    return pc
+  }, [sessionId, sendMessage, isDemoMode])
+
+  // Iniciar Negociação WebRTC (Criar Offer)
+  const initiateOffer = useCallback(async () => {
+    if (isDemoMode) return
+    const pc = createPeerConnection()
+    try {
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      sendMessage?.('RTC_OFFER', offer, sessionId)
+    } catch (err) {
+      console.warn('Erro ao criar WebRTC offer:', err)
+    }
+  }, [createPeerConnection, isDemoMode, sendMessage, sessionId])
+
+  // WebSocket Subscription for Real-time Sync (Draw, Chat, WebRTC, Call End)
+  useEffect(() => {
+    if (isDemoMode || !subscribe || !sendMessage) return
+
+    // Entra na sala
+    sendMessage('JOIN_ROOM', {}, sessionId)
+
+    const unsubscribe = subscribe(async (msg) => {
+      if (msg.sessionId && msg.sessionId !== sessionId) return
+
+      // Novo participante entrou na sala -> Tutor toma iniciativa e envia offer
+      if (msg.type === 'USER_JOINED_ROOM') {
+        if (currentUser.role === 'TUTOR') {
+          initiateOffer()
+        }
+      }
+
+      // WebRTC Offer recebido
+      if (msg.type === 'RTC_OFFER' && msg.payload) {
+        const pc = createPeerConnection()
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.payload as RTCSessionDescriptionInit))
+          const answer = await pc.createAnswer()
+          await pc.setLocalDescription(answer)
+          sendMessage('RTC_ANSWER', answer, sessionId)
+        } catch (err) {
+          console.warn('Erro ao processar WebRTC offer:', err)
+        }
+      }
+
+      // WebRTC Answer recebido
+      if (msg.type === 'RTC_ANSWER' && msg.payload) {
+        const pc = peerConnectionRef.current
+        if (pc) {
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.payload as RTCSessionDescriptionInit))
+          } catch (err) {
+            console.warn('Erro ao processar WebRTC answer:', err)
+          }
+        }
+      }
+
+      // WebRTC ICE Candidate recebido
+      if (msg.type === 'RTC_ICE_CANDIDATE' && msg.payload) {
+        const pc = peerConnectionRef.current
+        if (pc) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(msg.payload as RTCIceCandidateInit))
+          } catch (err) {
+            console.warn('Erro ao adicionar ICE candidate:', err)
+          }
+        }
+      }
+
+      // Quadro Branco: Traço recebido em tempo real
+      if (msg.type === 'ROOM_DRAW' && msg.payload) {
+        const { prevX, prevY, currentX, currentY, color, width } = msg.payload as {
+          prevX: number
+          prevY: number
+          currentX: number
+          currentY: number
+          color: string
+          width: number
+        }
+        const canvas = whiteboardCanvasRef.current
+        if (canvas) {
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.beginPath()
+            ctx.moveTo(prevX, prevY)
+            ctx.lineTo(currentX, currentY)
+            ctx.strokeStyle = color
+            ctx.lineWidth = width
+            ctx.lineCap = 'round'
+            ctx.lineJoin = 'round'
+            ctx.stroke()
+          }
+        }
+      }
+
+      // Quadro Branco: Limpar Lousa
+      if (msg.type === 'ROOM_CLEAR_BOARD') {
+        const canvas = whiteboardCanvasRef.current
+        if (canvas) {
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.fillStyle = '#FFFFFF'
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+          }
+        }
+      }
+
+      // Chat da Sala
+      if (msg.type === 'ROOM_CHAT' && msg.payload) {
+        setChatMessages((prev) => [...prev, msg.payload as ChatMessage])
+      }
+
+      // Aluno encerrou a chamada -> Monitor fecha automaticamente
+      if (msg.type === 'CALL_ENDED_BY_STUDENT') {
+        setAutoCloseAlert(
+          'O aluno encerrou a monitoria e enviou a avaliação de conformidade. A sala foi finalizada.'
+        )
+        setTimeout(() => {
+          onClose()
+        }, 3000)
+      }
+    })
+
+    return () => {
+      sendMessage('LEAVE_ROOM', {}, sessionId)
+      unsubscribe()
+    }
+  }, [isDemoMode, subscribe, sendMessage, sessionId, currentUser.role, createPeerConnection, initiateOffer, onClose])
+
+  // Initialize Local Media Streams & Continuous Pre-Recording
   useEffect(() => {
     let animationFrameId: number
 
@@ -113,6 +294,13 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream
+        }
+
+        // Se o peer connection já existe, anexa os tracks
+        if (peerConnectionRef.current) {
+          stream.getTracks().forEach((track) => {
+            peerConnectionRef.current?.addTrack(track, stream)
+          })
         }
 
         // Setup Audio Analyser for VU meter
@@ -158,20 +346,19 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
             }
           }
 
-          recorder.start(1000) // coletar chunks a cada 1 segundo
+          recorder.start(1000)
           mediaRecorderRef.current = recorder
           setIsRecording(true)
         } catch (recorderErr) {
-          console.warn('MediaRecorder não suportado neste navegador:', recorderErr)
+          console.warn('MediaRecorder não suportado:', recorderErr)
         }
       } catch (err) {
-        console.warn('Permissão de câmera/microfone não concedida ou dispositivo ausente:', err)
+        console.warn('Permissão de câmera/microfone não concedida:', err)
       }
     }
 
     initMedia()
 
-    // Timer de gravação
     const timerInterval = setInterval(() => {
       setRecordingDurationSeconds((prev) => prev + 1)
     }, 1000)
@@ -188,6 +375,9 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach((track) => track.stop())
       }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close()
+      }
       if (audioContextRef.current) {
         audioContextRef.current.close().catch(() => {})
       }
@@ -201,7 +391,6 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // Ajusta resolução do canvas
     canvas.width = canvas.parentElement?.clientWidth || 800
     canvas.height = 480
     ctx.lineCap = 'round'
@@ -232,12 +421,22 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
     }
   }
 
-  // Toggle Screen Sharing
+  // Toggle Screen Sharing & Replace Track in WebRTC PeerConnection
   async function toggleScreenSharing() {
     if (isScreenSharing) {
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach((track) => track.stop())
         screenStreamRef.current = null
+      }
+      // Restaura o track da câmera no WebRTC
+      if (peerConnectionRef.current && localStreamRef.current) {
+        const videoTrack = localStreamRef.current.getVideoTracks()[0]
+        const sender = peerConnectionRef.current
+          .getSenders()
+          .find((s) => s.track?.kind === 'video')
+        if (sender && videoTrack) {
+          sender.replaceTrack(videoTrack)
+        }
       }
       setIsScreenSharing(false)
     } else {
@@ -247,11 +446,29 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
           audio: true,
         })
         screenStreamRef.current = stream
-        if (screenVideoRef.current) {
-          screenVideoRef.current.srcObject = stream
+
+        // Substitui o track de vídeo enviado para o parceiro no WebRTC
+        const screenTrack = stream.getVideoTracks()[0]
+        if (peerConnectionRef.current && screenTrack) {
+          const sender = peerConnectionRef.current
+            .getSenders()
+            .find((s) => s.track?.kind === 'video')
+          if (sender) {
+            sender.replaceTrack(screenTrack)
+          }
         }
-        stream.getVideoTracks()[0].onended = () => {
+
+        screenTrack.onended = () => {
           setIsScreenSharing(false)
+          if (peerConnectionRef.current && localStreamRef.current) {
+            const videoTrack = localStreamRef.current.getVideoTracks()[0]
+            const sender = peerConnectionRef.current
+              .getSenders()
+              .find((s) => s.track?.kind === 'video')
+            if (sender && videoTrack) {
+              sender.replaceTrack(videoTrack)
+            }
+          }
         }
         setIsScreenSharing(true)
       } catch (err) {
@@ -283,12 +500,31 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
     const currentX = e.clientX - rect.left
     const currentY = e.clientY - rect.top
 
+    const strokeColor = isEraser ? '#FFFFFF' : drawColor
+    const strokeWidth = isEraser ? lineWidth * 4 : lineWidth
+
     ctx.beginPath()
     ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y)
     ctx.lineTo(currentX, currentY)
-    ctx.strokeStyle = isEraser ? '#FFFFFF' : drawColor
-    ctx.lineWidth = isEraser ? lineWidth * 4 : lineWidth
+    ctx.strokeStyle = strokeColor
+    ctx.lineWidth = strokeWidth
     ctx.stroke()
+
+    // Envia traço em tempo real para o outro participante
+    if (sendMessage && !isDemoMode) {
+      sendMessage(
+        'ROOM_DRAW',
+        {
+          prevX: lastPosRef.current.x,
+          prevY: lastPosRef.current.y,
+          currentX,
+          currentY,
+          color: strokeColor,
+          width: strokeWidth,
+        },
+        sessionId
+      )
+    }
 
     lastPosRef.current = { x: currentX, y: currentY }
   }
@@ -304,6 +540,10 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
     if (!ctx) return
     ctx.fillStyle = '#FFFFFF'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    if (sendMessage && !isDemoMode) {
+      sendMessage('ROOM_CLEAR_BOARD', {}, sessionId)
+    }
   }
 
   function downloadWhiteboard() {
@@ -322,16 +562,21 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
 
     const msg: ChatMessage = {
       id: Date.now().toString(),
+      senderId: currentUser.id,
       senderName: currentUser.name,
       senderRole: currentUser.role,
       text: newMessageText.trim(),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
+
     setChatMessages((prev) => [...prev, msg])
+    if (sendMessage && !isDemoMode) {
+      sendMessage('ROOM_CHAT', msg, sessionId)
+    }
     setNewMessageText('')
   }
 
-  // Finalizar Sessão (Quando Dúvida Foi Sanada) -> Descarta gravação temporária e libera Pix
+  // Finalizar Sessão (Quando Dúvida Foi Sanada - EXCLUSIVO ALUNO)
   async function handleConfirmResolved() {
     setIsSubmittingFinish(true)
     try {
@@ -340,9 +585,10 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
           studentRating,
           studentFeedback: studentFeedback.trim() || undefined,
         })
+        // Notifica o monitor que a chamada foi encerrada
+        sendMessage?.('CALL_ENDED_BY_STUDENT', { resolved: true }, sessionId)
       }
 
-      // Descarta explicitamente o buffer de gravação da memória
       recordedChunksRef.current = []
 
       setActionSuccessMessage(
@@ -362,7 +608,7 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
     }
   }
 
-  // Abrir Disputa com a Gravação Prévia Anexada -> Envia vídeo para ouvidoria e congela Pix
+  // Abrir Disputa com Gravação Anexada (EXCLUSIVO ALUNO)
   async function handleConfirmDispute() {
     if (!disputeReason.trim() || disputeReason.length < 5) {
       alert('Por favor, descreva em detalhes por que sua dúvida não foi sanada.')
@@ -383,6 +629,7 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
             'Content-Type': 'multipart/form-data',
           },
         })
+        sendMessage?.('CALL_ENDED_BY_STUDENT', { resolved: false }, sessionId)
       }
 
       setActionSuccessMessage(
@@ -402,7 +649,6 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
     }
   }
 
-  // Formatação do Timer
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60)
     const s = secs % 60
@@ -474,15 +720,35 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
             <span className="hidden sm:inline">Chat</span>
           </button>
 
-          <button
-            onClick={() => setIsEndModalOpen(true)}
-            className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center gap-2 shadow-lg shadow-rose-900/40 transition-all"
-          >
-            <PhoneOff className="w-4 h-4" />
-            <span>Encerrar Sessão</span>
-          </button>
+          {/* Se Aluno: Botão de Encerrar Sessão com Avaliação */}
+          {isStudent ? (
+            <button
+              onClick={() => setIsEndModalOpen(true)}
+              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center gap-2 shadow-lg shadow-rose-900/40 transition-all"
+            >
+              <PhoneOff className="w-4 h-4" />
+              <span>Encerrar Sessão</span>
+            </button>
+          ) : (
+            /* Se Monitor: Botão de Sair da Sala */
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-extrabold text-xs flex items-center gap-2 transition-all"
+            >
+              <LogOut className="w-4 h-4 text-slate-400" />
+              <span>Sair da Sala</span>
+            </button>
+          )}
         </div>
       </header>
+
+      {/* Alerta de encerramento automático disparado pelo aluno para o monitor */}
+      {autoCloseAlert && (
+        <div className="bg-emerald-600 text-white text-center py-2.5 px-4 text-xs font-extrabold flex items-center justify-center gap-2 animate-bounce">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{autoCloseAlert}</span>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -535,37 +801,50 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
                 </div>
               </div>
 
-              {/* Remote / Screen Share / Peer Video Box */}
+              {/* Remote Video Box (Fluxo Real do Parceiro via WebRTC) */}
               <div className="relative bg-slate-900 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center">
-                {isScreenSharing ? (
-                  <video
-                    ref={screenVideoRef}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-contain bg-black"
-                  />
-                ) : (
+                <video
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  className={`w-full h-full object-cover ${!hasRemoteStream && !isDemoMode ? 'hidden' : ''}`}
+                />
+
+                {(!hasRemoteStream && !isDemoMode) && (
                   <div className="flex flex-col items-center justify-center text-center p-6 text-slate-400">
                     <div className="h-20 w-20 rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center mb-3 font-black text-2xl border border-brand-purple/40">
-                      {isDemoMode ? 'LM' : '🧑‍🏫'}
+                      👥
                     </div>
                     <p className="font-extrabold text-slate-200 text-base">
-                      {isDemoMode ? 'Prof. Lucas Mendes (Monitor de Cálculo I)' : 'Participante Conectado'}
+                      Aguardando Parceiro
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1 max-w-xs">
+                      Assim que o outro participante entrar, o vídeo e áudio em tempo real se sincronizarão automaticamente.
+                    </p>
+                    <div className="mt-4 flex items-center gap-2 text-xs text-emerald-400 bg-emerald-950/60 px-3 py-1.5 rounded-full border border-emerald-800/60">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Canal P2P WebRTC Conectando...</span>
+                    </div>
+                  </div>
+                )}
+
+                {isDemoMode && (
+                  <div className="flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                    <div className="h-20 w-20 rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center mb-3 font-black text-2xl border border-brand-purple/40">
+                      LM
+                    </div>
+                    <p className="font-extrabold text-slate-200 text-base">
+                      Prof. Lucas Mendes (Monitor de Cálculo I)
                     </p>
                     <p className="text-xs text-slate-500 mt-1">
-                      {isDemoMode
-                        ? 'Monitor simulado no ambiente de teste'
-                        : 'Aguardando fluxo de mídia do parceiro'}
+                      Monitor simulado no ambiente de teste
                     </p>
-                    <span className="mt-4 px-3 py-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800/80 text-[11px] font-bold">
-                      ● Áudio e Vídeo Sincronizados
-                    </span>
                   </div>
                 )}
 
                 <div className="absolute bottom-4 left-4 bg-slate-950/80 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center gap-2">
                   <span className="text-xs font-bold text-slate-100">
-                    {isScreenSharing ? '🖥️ Compartilhamento de Tela' : isDemoMode ? 'Lucas Mendes (Monitor)' : 'Parceiro'}
+                    {isDemoMode ? 'Lucas Mendes (Monitor)' : isStudent ? 'Monitor' : 'Aluno'}
                   </span>
                 </div>
               </div>
@@ -771,8 +1050,8 @@ export function VirtualRoom({ sessionId, currentUser, isDemoMode = false, onClos
         </button>
       </footer>
 
-      {/* Modal Obrigatório de Encerramento com Análise de Dúvida e Gravação */}
-      {isEndModalOpen && (
+      {/* Modal Obrigatório de Encerramento com Análise de Dúvida e Gravação (EXCLUSIVO ALUNO) */}
+      {isEndModalOpen && isStudent && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-lg w-full p-6 sm:p-8 text-white shadow-2xl space-y-6">
             {actionSuccessMessage ? (

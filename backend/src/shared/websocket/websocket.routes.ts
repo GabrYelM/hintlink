@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { connectionManager } from '../../shared/websocket/connection-manager.js'
+import { prisma } from '../../shared/database/prisma.js'
 
 export async function websocketRoutes(app: FastifyInstance) {
   app.get('/ws', { websocket: true }, (socket, req) => {
@@ -36,12 +37,95 @@ export async function websocketRoutes(app: FastifyInstance) {
         })
       )
 
-      socket.on('message', (message: any) => {
+      socket.on('message', async (message: any) => {
         try {
           const parsed = JSON.parse(message.toString())
+          const { type, sessionId, payload } = parsed
+
           // Tratamento de ping / keep-alive
-          if (parsed.type === 'PING') {
+          if (type === 'PING') {
             socket.send(JSON.stringify({ type: 'PONG' }))
+            return
+          }
+
+          if (type === 'JOIN_ROOM' && sessionId) {
+            connectionManager.joinRoom(sessionId, userId, role, socket)
+            // Informa os outros participantes que este usuário entrou
+            connectionManager.sendToRoom(
+              sessionId,
+              'USER_JOINED_ROOM',
+              { userId, role },
+              socket
+            )
+            return
+          }
+
+          if (type === 'LEAVE_ROOM' && sessionId) {
+            connectionManager.leaveRoom(sessionId, socket)
+            connectionManager.sendToRoom(
+              sessionId,
+              'USER_LEFT_ROOM',
+              { userId },
+              socket
+            )
+            return
+          }
+
+          // Chat de Agendamento e da Chamada
+          if (type === 'ROOM_CHAT' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'ROOM_CHAT', payload, socket)
+            // Persiste no banco de dados para histórico
+            try {
+              const session = await prisma.tutoringSession.findUnique({
+                where: { id: sessionId },
+                select: { chatMessages: true },
+              })
+              const existingMessages = Array.isArray(session?.chatMessages)
+                ? (session.chatMessages as any[])
+                : []
+              await prisma.tutoringSession.update({
+                where: { id: sessionId },
+                data: {
+                  chatMessages: [...existingMessages, payload],
+                },
+              })
+            } catch {
+              // não bloqueia envio em tempo real se persistência falhar
+            }
+            return
+          }
+
+          // Quadro Branco: Traços em tempo real
+          if (type === 'ROOM_DRAW' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'ROOM_DRAW', payload, socket)
+            return
+          }
+
+          // Quadro Branco: Limpar Lousa
+          if (type === 'ROOM_CLEAR_BOARD' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'ROOM_CLEAR_BOARD', payload, socket)
+            return
+          }
+
+          // WebRTC Signaling: Offer, Answer, ICE Candidates
+          if (
+            (type === 'RTC_OFFER' || type === 'RTC_ANSWER' || type === 'RTC_ICE_CANDIDATE') &&
+            sessionId
+          ) {
+            connectionManager.sendToRoom(sessionId, type, payload, socket)
+            return
+          }
+
+          // Chamada iniciada (notifica o outro participante no chat de agendamento)
+          if (type === 'CALL_STARTED' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'CALL_STARTED', { startedBy: userId }, socket)
+            return
+          }
+
+          // Aluno encerrou a chamada (fecha a sala automaticamente para o monitor)
+          if (type === 'CALL_ENDED_BY_STUDENT' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'CALL_ENDED_BY_STUDENT', payload, socket)
+            return
           }
         } catch {
           // Ignora mensagens mal formatadas

@@ -6,8 +6,15 @@ export interface ConnectedUser {
   socket: WebSocket
 }
 
+export interface RoomParticipant {
+  userId: string
+  role: 'STUDENT' | 'TUTOR' | 'ADMIN'
+  socket: WebSocket
+}
+
 class ConnectionManager {
   private connections: Map<string, ConnectedUser[]> = new Map()
+  private rooms: Map<string, RoomParticipant[]> = new Map()
 
   addConnection(userId: string, role: 'STUDENT' | 'TUTOR' | 'ADMIN', socket: WebSocket) {
     const existing = this.connections.get(userId) || []
@@ -16,14 +23,57 @@ class ConnectionManager {
 
   removeConnection(userId: string, socket: WebSocket) {
     const existing = this.connections.get(userId)
-    if (!existing) return
-
-    const filtered = existing.filter((conn) => conn.socket !== socket)
-    if (filtered.length === 0) {
-      this.connections.delete(userId)
-    } else {
-      this.connections.set(userId, filtered)
+    if (existing) {
+      const filtered = existing.filter((conn) => conn.socket !== socket)
+      if (filtered.length === 0) {
+        this.connections.delete(userId)
+      } else {
+        this.connections.set(userId, filtered)
+      }
     }
+
+    // Remove também de todas as salas onde este socket estava
+    for (const [sessionId, participants] of this.rooms.entries()) {
+      const updated = participants.filter((p) => p.socket !== socket)
+      if (updated.length === 0) {
+        this.rooms.delete(sessionId)
+      } else {
+        this.rooms.set(sessionId, updated)
+      }
+    }
+  }
+
+  joinRoom(sessionId: string, userId: string, role: 'STUDENT' | 'TUTOR' | 'ADMIN', socket: WebSocket) {
+    const current = this.rooms.get(sessionId) || []
+    const filtered = current.filter((p) => p.socket !== socket)
+    this.rooms.set(sessionId, [...filtered, { userId, role, socket }])
+  }
+
+  leaveRoom(sessionId: string, socket: WebSocket) {
+    const current = this.rooms.get(sessionId)
+    if (!current) return
+    const updated = current.filter((p) => p.socket !== socket)
+    if (updated.length === 0) {
+      this.rooms.delete(sessionId)
+    } else {
+      this.rooms.set(sessionId, updated)
+    }
+  }
+
+  sendToRoom(sessionId: string, type: string, payload: any, excludeSocket?: WebSocket) {
+    const participants = this.rooms.get(sessionId)
+    if (!participants) return
+
+    const message = JSON.stringify({ type, sessionId, payload, timestamp: new Date().toISOString() })
+    for (const p of participants) {
+      if (p.socket !== excludeSocket && p.socket.readyState === WebSocket.OPEN) {
+        p.socket.send(message)
+      }
+    }
+  }
+
+  getRoomParticipants(sessionId: string) {
+    return this.rooms.get(sessionId) || []
   }
 
   sendToUser(userId: string, type: string, payload: any) {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '@/services/api'
 import {
   Bell,
@@ -14,9 +14,12 @@ import {
   FileText,
   Video,
   Sparkles,
+  MessageSquare,
 } from 'lucide-react'
 import axios from 'axios'
 import { VirtualRoom } from './VirtualRoom'
+import { SessionChatModal, ChatMessage } from './SessionChatModal'
+import { useHintlinkSocket } from '@/hooks/use-socket'
 
 interface OpenRequest {
   id: string
@@ -52,9 +55,31 @@ interface TutorRecord {
 interface ActiveSessionData {
   id: string
   status: string
-  studentId?: string
-  tutorId?: string
-  durationMinutes?: number
+  durationMinutes: number
+  request?: {
+    topic: string
+    description?: string
+    offeredPrice: number | string
+    subject?: {
+      code: string
+      name: string
+    }
+  }
+  student?: {
+    id: string
+    name: string
+    rating: number
+  }
+  tutor?: {
+    id: string
+    name: string
+    rating: number
+  }
+  escrow?: {
+    amount: number | string
+    status: string
+  }
+  chatMessages?: ChatMessage[]
 }
 
 interface TutorUser {
@@ -77,12 +102,17 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
   const [isUploadingTranscript, setIsUploadingTranscript] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Active Session & Virtual Room
+  // Active Session, Chat de Agendamento & Virtual Room
   const [activeSession, setActiveSession] = useState<ActiveSessionData | null>(null)
+  const [isChatModalOpen, setIsChatModalOpen] = useState(false)
   const [isVirtualRoomOpen, setIsVirtualRoomOpen] = useState(false)
   const [isDemoRoomOpen, setIsDemoRoomOpen] = useState(false)
 
-  async function loadData() {
+  // WebSocket Connection
+  const token = typeof window !== 'undefined' ? localStorage.getItem('@hintlink:token') : null
+  const { sendMessage, subscribe } = useHintlinkSocket(token)
+
+  const loadData = useCallback(async () => {
     try {
       const [reqRes, mySubRes, activeRes] = await Promise.all([
         api.get('/requests/open'),
@@ -95,11 +125,42 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
     } catch (err) {
       console.error('Erro ao carregar dados do dashboard do monitor:', err)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
+
+  // Escuta eventos em tempo real do WebSocket (sem refresh!)
+  useEffect(() => {
+    const unsubscribe = subscribe((msg) => {
+      // 🚀 Novo chamado aberto por algum aluno -> aparece no feed na hora!
+      if (msg.type === 'NEW_TUTORING_REQUEST') {
+        loadData()
+        setFeedback({
+          type: 'success',
+          message: 'Novo chamado de aluno recebido em tempo real!',
+        })
+      }
+
+      // Outro monitor pegou o chamado -> remove do feed na hora!
+      const payload = msg.payload as { requestId?: string } | undefined
+      if (msg.type === 'REQUEST_TAKEN' && payload?.requestId) {
+        setOpenRequests((prev) => prev.filter((r) => r.id !== payload.requestId))
+      }
+
+      // Sessão concluída
+      if (msg.type === 'CALL_ENDED_BY_STUDENT') {
+        loadData()
+        setIsVirtualRoomOpen(false)
+        setIsChatModalOpen(false)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [subscribe, loadData])
 
   // Upload e Parsing do Histórico Escolar Oficial em PDF
   async function handleTranscriptUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -134,7 +195,6 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
           'Histórico processado com sucesso! Suas matérias aprovadas foram validadas.',
       })
 
-      // Recarrega as matérias aprovadas
       await loadData()
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -158,6 +218,7 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
     }
   }
 
+  // Aceitar chamado: Agora abre o Chat de Agendamento em vez da videochamada direta
   async function handleAcceptRequest(requestId: string) {
     setLoadingAction(requestId)
     setFeedback(null)
@@ -166,12 +227,13 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
       const response = await api.patch(`/requests/${requestId}/accept`)
       setFeedback({
         type: 'success',
-        message: 'Você aceitou a monitoria! A sala virtual e a custódia Pix foram ativadas.',
+        message: 'Você aceitou a monitoria! Chat de agendamento aberto para alinhar detalhes com o aluno.',
       })
       // Remove da lista de chamados abertos
       setOpenRequests((prev) => prev.filter((r) => r.id !== requestId))
       setActiveSession(response.data.session)
-      setIsVirtualRoomOpen(true)
+      // Abre o Chat de Agendamento primeiro!
+      setIsChatModalOpen(true)
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         setFeedback({
@@ -223,23 +285,36 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
         </div>
       </div>
 
-      {/* Alerta de Sessão Ativa */}
+      {/* Alerta de Sessão Ativa com Botões para Chat ou Vídeo */}
       {activeSession && (
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-2xl p-4 text-white shadow-lg flex items-center justify-between">
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-2xl p-4 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="h-3 w-3 rounded-full bg-white animate-ping"></span>
+            <span className="h-3 w-3 rounded-full bg-white animate-ping shrink-0"></span>
             <div>
-              <h4 className="font-extrabold text-sm">Você possui uma monitoria em andamento!</h4>
-              <p className="text-xs text-white/80">O aluno está aguardando na sala virtual com custódia Pix retida.</p>
+              <h4 className="font-extrabold text-sm">
+                Você possui uma monitoria em andamento com {activeSession.student?.name || 'um aluno'}!
+              </h4>
+              <p className="text-xs text-white/80">
+                Custódia Pix retida. Alinhem os horários no chat ou iniciem a videochamada.
+              </p>
             </div>
           </div>
-          <button
-            onClick={() => setIsVirtualRoomOpen(true)}
-            className="px-5 py-2.5 rounded-xl bg-white text-emerald-800 font-black text-xs hover:bg-slate-100 shadow-md flex items-center gap-2 transition-all"
-          >
-            <Video className="w-4 h-4" />
-            <span>Entrar na Sala de Aula</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setIsChatModalOpen(true)}
+              className="px-4 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-extrabold text-xs flex items-center gap-1.5 transition-all"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Chat & Agendamento</span>
+            </button>
+            <button
+              onClick={() => setIsVirtualRoomOpen(true)}
+              className="px-4 py-2 rounded-xl bg-white text-emerald-800 font-black text-xs hover:bg-slate-100 shadow-md flex items-center gap-1.5 transition-all"
+            >
+              <Video className="w-4 h-4" />
+              <span>Entrar no Vídeo</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -278,7 +353,7 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
               <CheckCircle2 className="w-10 h-10 mx-auto text-emerald-500 mb-3" />
               <p className="font-bold text-slate-700 text-base">Nenhum chamado aberto na fila no momento</p>
               <p className="text-xs text-slate-400 mt-1">
-                Fique atento! Novas dúvidas abertas por alunos aparecerão aqui instantaneamente.
+                Fique atento! Novas dúvidas abertas por alunos aparecerão aqui instantaneamente via WebSocket sem refresh.
               </p>
             </div>
           ) : (
@@ -322,7 +397,7 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
                     disabled={loadingAction === req.id}
                     className="w-full sm:w-auto px-6 py-3 rounded-xl bg-brand-yellow hover:bg-amber-400 text-brand-dark font-extrabold text-sm shadow-md shadow-brand-yellow/30 transition-all disabled:opacity-50"
                   >
-                    {loadingAction === req.id ? 'Aceitando...' : 'Aceitar Corrida (Atender)'}
+                    {loadingAction === req.id ? 'Aceitando...' : 'Aceitar Chamado & Agendar'}
                   </button>
                 </div>
               </div>
@@ -405,12 +480,29 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
         </div>
       </div>
 
+      {/* Chat de Agendamento Pré-Chamada */}
+      {isChatModalOpen && activeSession && (
+        <SessionChatModal
+          session={activeSession}
+          currentUser={user}
+          sendMessage={sendMessage}
+          subscribe={subscribe}
+          onStartCall={() => {
+            setIsChatModalOpen(false)
+            setIsVirtualRoomOpen(true)
+          }}
+          onClose={() => setIsChatModalOpen(false)}
+        />
+      )}
+
       {/* Virtual Room Modal (Chamada Real ou Modo Teste) */}
       {(isVirtualRoomOpen || isDemoRoomOpen) && (
         <VirtualRoom
           sessionId={activeSession?.id || 'demo-ufabc-room-1'}
           currentUser={user}
           isDemoMode={isDemoRoomOpen}
+          sendMessage={sendMessage}
+          subscribe={subscribe}
           onClose={() => {
             setIsVirtualRoomOpen(false)
             setIsDemoRoomOpen(false)

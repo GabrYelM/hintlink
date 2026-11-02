@@ -130,6 +130,7 @@ model TutoringSession {
   endedAt         DateTime?
   durationMinutes Int
   whiteboardData  Json?
+  chatMessages    Json?
   studentRating   Int?          // 1 a 5
   studentFeedback String?
   createdAt       DateTime      @default(now())
