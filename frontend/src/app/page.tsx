@@ -5,6 +5,7 @@ import { api, setAuthToken } from '@/services/api'
 import { HintlinkLogo } from '@/components/HintlinkLogo'
 import { StudentDashboard } from '@/components/StudentDashboard'
 import { TutorDashboard } from '@/components/TutorDashboard'
+import { ProfileModal } from '@/components/ProfileModal'
 import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2, LogOut } from 'lucide-react'
 import axios from 'axios'
 
@@ -32,6 +33,7 @@ export default function Home() {
   const [success, setSuccess] = useState<string | null>(null)
   const [loggedUser, setLoggedUser] = useState<UserProfile | null>(null)
   const [initializing, setInitializing] = useState(true)
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
 
   // Verifica se o usuário já estava logado ao abrir o site
   useEffect(() => {
@@ -137,12 +139,20 @@ export default function Home() {
           <div className="flex items-center gap-4">
             {loggedUser ? (
               <div className="flex items-center gap-3">
-                <div className="text-right hidden sm:block">
-                  <span className="block text-xs font-bold text-brand-blue">{loggedUser.name}</span>
-                  <span className="block text-[11px] font-semibold text-brand-purple">
-                    {loggedUser.role === 'STUDENT' ? '🎓 Aluno' : '👨‍🏫 Monitor'}
-                  </span>
-                </div>
+                <button
+                  onClick={() => setIsProfileOpen(true)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 hover:border-brand-purple/40 hover:bg-slate-50 transition-all text-left"
+                >
+                  <div className="h-8 w-8 rounded-full bg-brand-purple/10 text-brand-purple flex items-center justify-center font-bold text-xs">
+                    {loggedUser.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="hidden sm:block">
+                    <span className="block text-xs font-bold text-brand-blue leading-tight">{loggedUser.name.split(' ')[0]}</span>
+                    <span className="block text-[10px] font-semibold text-brand-purple leading-tight">
+                      {loggedUser.role === 'STUDENT' ? '🎓 Aluno' : '👨‍🏫 Monitor'}
+                    </span>
+                  </div>
+                </button>
                 <button
                   onClick={handleLogout}
                   title="Sair da Conta"
@@ -380,6 +390,17 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Modal de Perfil e Alternância de Papel */}
+      {isProfileOpen && loggedUser && (
+        <ProfileModal
+          user={loggedUser}
+          onClose={() => setIsProfileOpen(false)}
+          onUserUpdated={(updatedUser) => {
+            setLoggedUser(updatedUser)
+          }}
+        />
+      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-500">

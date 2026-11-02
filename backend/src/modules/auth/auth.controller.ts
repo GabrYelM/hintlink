@@ -78,3 +78,30 @@ export async function profile(request: FastifyRequest, reply: FastifyReply) {
     user: userWithoutPassword,
   })
 }
+
+export async function toggleRole(request: FastifyRequest, reply: FastifyReply) {
+  const usersRepository = new UsersRepository()
+  const user = await usersRepository.findById(request.user.sub)
+
+  if (!user) {
+    return reply.status(404).send({ message: 'Usuário não encontrado.' })
+  }
+
+  // Alterna entre STUDENT e TUTOR
+  const newRole = user.role === 'STUDENT' ? 'TUTOR' : 'STUDENT'
+  const updatedUser = await usersRepository.updateRole(user.id, newRole)
+
+  // Emite novo token JWT com a role atualizada
+  const token = await reply.jwtSign(
+    { role: updatedUser.role },
+    { sign: { sub: updatedUser.id } }
+  )
+
+  const { passwordHash: _, ...userWithoutPassword } = updatedUser
+
+  return reply.status(200).send({
+    message: `Perfil alternado para ${newRole === 'TUTOR' ? 'Monitor' : 'Aluno'} com sucesso!`,
+    user: userWithoutPassword,
+    token,
+  })
+}

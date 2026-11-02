@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify'
-import { authenticate, profile, register } from './auth.controller.js'
+import { authenticate, profile, register, toggleRole } from './auth.controller.js'
 import { verifyJwt } from '../../shared/middlewares/verify-jwt.js'
 
 export async function authRoutes(app: FastifyInstance) {
@@ -39,5 +39,19 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     profile
+  )
+
+  app.patch(
+    '/me/role',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Autenticação & Usuários'],
+        summary: 'Alternar tipo de perfil (Aluno <-> Monitor)',
+        description: 'Permite ao estudante se tornar monitor ou alternar seu papel ativo no sistema.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    toggleRole
   )
 }
