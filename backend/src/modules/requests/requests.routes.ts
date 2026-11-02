@@ -4,16 +4,45 @@ import { verifyJwt } from '../../shared/middlewares/verify-jwt.js'
 import { verifyUserRole } from '../../shared/middlewares/verify-user-role.js'
 
 export async function requestsRoutes(app: FastifyInstance) {
-  // Alunos e monitores autenticados podem ver chamados
-  app.get('/requests/open', { onRequest: [verifyJwt] }, listOpenRequests)
+  app.get(
+    '/requests/open',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Chamados de Monitoria (Estilo Uber)'],
+        summary: 'Listar chamados em aberto',
+        description: 'Retorna a lista de alunos aguardando atendimento. Suporta o parâmetro ?eligibleOnly=true para filtrar apenas disciplinas aprovadas do monitor.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    listOpenRequests
+  )
 
-  // Aluno abre chamado
-  app.post('/requests', { onRequest: [verifyJwt] }, createRequest)
+  app.post(
+    '/requests',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Chamados de Monitoria (Estilo Uber)'],
+        summary: 'Aluno abre chamado de dúvida',
+        description: 'Cria uma nova solicitação informando disciplina, tópico da dúvida, duração e valor ofertado.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    createRequest
+  )
 
-  // Apenas monitor (TUTOR) pode dar "aceitar" (estilo Uber)
   app.patch(
     '/requests/:id/accept',
-    { onRequest: [verifyJwt, verifyUserRole(['TUTOR', 'ADMIN'])] },
+    {
+      onRequest: [verifyJwt, verifyUserRole(['TUTOR', 'ADMIN'])],
+      schema: {
+        tags: ['Chamados de Monitoria (Estilo Uber)'],
+        summary: 'Monitor aceita chamado',
+        description: 'O monitor aceita a corrida: cria a sala de sessão, gera a transação de custódia Pix e fecha o chamado.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
     acceptRequest
   )
 }

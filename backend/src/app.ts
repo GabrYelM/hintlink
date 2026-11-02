@@ -2,6 +2,8 @@ import fastify from 'fastify'
 import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import websocket from '@fastify/websocket'
+import fastifySwagger from '@fastify/swagger'
+import fastifySwaggerUi from '@fastify/swagger-ui'
 import { ZodError } from 'zod'
 import { AppError } from './shared/errors/app-error.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
@@ -14,7 +16,7 @@ export const app = fastify({
   logger: process.env.NODE_ENV !== 'test',
 })
 
-// Plugins
+// Plugins de Infraestrutura
 app.register(cors, {
   origin: process.env.FRONTEND_URL || true,
 })
@@ -25,6 +27,44 @@ app.register(jwt, {
 
 app.register(websocket)
 
+// Documentação Swagger / OpenAPI
+app.register(fastifySwagger, {
+  openapi: {
+    info: {
+      title: 'Hintlink API - Monitorias Acadêmicas Sob Demanda',
+      description:
+        'Documentação interativa da API do Hintlink. Permite testar rotas de autenticação, catálogo de matérias, matching estilo Uber e custódia Pix.',
+      version: '1.0.0',
+    },
+    servers: [
+      {
+        url: 'http://localhost:3333',
+        description: 'Servidor Local de Desenvolvimento',
+      },
+    ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Insira o token JWT gerado na rota /api/v1/auth/login',
+        },
+      },
+    },
+  },
+})
+
+app.register(fastifySwaggerUi, {
+  routePrefix: '/docs',
+  uiConfig: {
+    docExpansion: 'list',
+    deepLinking: true,
+  },
+  staticCSP: true,
+  transformStaticCSP: (header) => header,
+})
+
 // Rotas da Aplicação
 app.register(authRoutes, { prefix: '/api/v1' })
 app.register(subjectsRoutes, { prefix: '/api/v1' })
@@ -33,13 +73,23 @@ app.register(requestsRoutes, { prefix: '/api/v1' })
 app.register(sessionsRoutes, { prefix: '/api/v1' })
 
 // Rota de Health Check
-app.get('/health', async () => {
-  return {
-    status: 'ok',
-    service: 'hintlink-backend',
-    timestamp: new Date().toISOString(),
+app.get(
+  '/health',
+  {
+    schema: {
+      tags: ['Infraestrutura'],
+      summary: 'Status do servidor',
+      description: 'Retorna se a API está online e respondendo.',
+    },
+  },
+  async () => {
+    return {
+      status: 'ok',
+      service: 'hintlink-backend',
+      timestamp: new Date().toISOString(),
+    }
   }
-})
+)
 
 // Tratamento global de erros
 app.setErrorHandler((error, _request, reply) => {

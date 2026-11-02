@@ -3,15 +3,59 @@ import { finishSession, getActiveSession, getSession, openDispute } from './sess
 import { verifyJwt } from '../../shared/middlewares/verify-jwt.js'
 
 export async function sessionsRoutes(app: FastifyInstance) {
-  // Consulta se o usuário tem alguma sessão ativa no momento
-  app.get('/sessions/active', { onRequest: [verifyJwt] }, getActiveSession)
+  app.get(
+    '/sessions/active',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Sessões & Sala Virtual'],
+        summary: 'Verificar sessão em andamento',
+        description: 'Verifica se o usuário logado tem alguma monitoria ocorrendo neste momento.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    getActiveSession
+  )
 
-  // Detalhes da sala virtual
-  app.get('/sessions/:id', { onRequest: [verifyJwt] }, getSession)
+  app.get(
+    '/sessions/:id',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Sessões & Sala Virtual'],
+        summary: 'Detalhes da sala de monitoria',
+        description: 'Retorna participantes, timestamps, status do Pix e dados da sessão.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    getSession
+  )
 
-  // Finalização da monitoria + avaliação do aluno + liberação de saldo
-  app.post('/sessions/:id/finish', { onRequest: [verifyJwt] }, finishSession)
+  app.post(
+    '/sessions/:id/finish',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Sessões & Sala Virtual'],
+        summary: 'Concluir monitoria & Liberar Pix',
+        description: 'Finaliza a aula, registra a avaliação/estrelas dada pelo aluno e libera o saldo em custódia para o monitor.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    finishSession
+  )
 
-  // Abertura de ticket de reclamação (congela repasse do Pix)
-  app.post('/sessions/:id/dispute', { onRequest: [verifyJwt] }, openDispute)
+  app.post(
+    '/sessions/:id/dispute',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Sessões & Sala Virtual'],
+        summary: 'Abrir ticket de reclamação',
+        description: 'Congela a sessão e o repasse financeiro do Pix para intervenção da administração.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    openDispute
+  )
 }
