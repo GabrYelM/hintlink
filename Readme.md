@@ -3,10 +3,11 @@
 # 🎓 Hintlink
 ### *A ponte inteligente entre dúvidas acadêmicas e conhecimento sob demanda.*
 
-[![Status do Projeto](https://img.shields.io/badge/Status-Fase%20de%20Planejamento%20e%20Arquitetura-blue?style=for-the-badge)](#-estágio-do-projeto)
+[![Status do Projeto](https://img.shields.io/badge/Status-MVP%20Funcional%20%26%20Em%20Testes-success?style=for-the-badge)](#-estágio-do-projeto)
 [![Modelo](https://img.shields.io/badge/Modelo-Uber--like%20Peer--to--Peer-orange?style=for-the-badge)](#-sobre-o-projeto)
-[![Plataforma](https://img.shields.io/badge/Abordagem-Web--First%20%28Foco%20em%20Simplicidade%29-brightgreen?style=for-the-badge)](#-diretriz-operacional-estratégia-web-first)
-[![Licença](https://img.shields.io/badge/Stack-100%25%20Open%20Source-success?style=for-the-badge)](#-ferramentas-e-stack-tecnológica)
+[![Plataforma](https://img.shields.io/badge/Abordagem-Web--First%20%28Multiplataforma%29-brightgreen?style=for-the-badge)](#-diretriz-operacional-estratégia-web-first)
+[![Licença](https://img.shields.io/badge/Stack-100%25%20Open%20Source-blue?style=for-the-badge)](#-ferramentas-e-stack-tecnológica)
+[![Testes](https://img.shields.io/badge/Testes-10%2F10%20Vitest%20Passed-emerald?style=for-the-badge)](#-testes-e-qualidade)
 
 </div>
 
@@ -17,172 +18,183 @@
 O **Hintlink** é uma plataforma universitária de monitorias sob demanda desenvolvida no modelo *peer-to-peer* (estilo Uber). O objetivo central é conectar estudantes universitários que enfrentam dificuldades pontuais em matérias específicas a monitores capacitados (outros estudantes que já cursaram e foram aprovados com excelência naquelas disciplinas), oferecendo atendimento imediato ou agendado, com segurança acadêmica e financeira.
 
 ### 🎯 Diretriz Operacional: Estratégia Web-First
-O projeto adota uma abordagem **Web-First**, priorizando o desenvolvimento de uma aplicação web responsiva em detrimento de um app nativo inicial, pelos seguintes motivos:
-- **Simplicidade e Agilidade:** Reduz a complexidade de configuração de ambientes de desenvolvimento mobile, testes em múltiplos dispositivos e processos de publicação em lojas (Google Play / App Store).
+O projeto adota uma abordagem **Web-First**, priorizando o desenvolvimento de uma aplicação web responsiva em detrimento de um app nativo inicial:
 - **Sem Barreiras de Entrada:** O estudante universitário com dúvida urgente consegue acessar a monitoria diretamente pelo navegador do celular ou computador via link, sem obrigação de baixar um aplicativo.
-- **Ecossistema Favorável para Sala Virtual:** Tecnologias essenciais do projeto como **WebRTC** (áudio e vídeo em tempo real) e **Canvas interativo** (quadro branco colaborativo) possuem suporte nativo, maduro e de fácil depuração nos navegadores modernos.
-- **Evolução Gradual para App:** Como a interface web é concebida de forma totalmente responsiva (adaptada tanto para celulares quanto para computadores), ela pode funcionar como **PWA (Progressive Web App)** e, havendo tempo hábil nas fases finais do semestre, ser portada para mobile (React Native / Capacitor / Flutter).
+- **Ecossistema Favorável para Sala Virtual:** Tecnologias essenciais do projeto como **WebRTC** (áudio e vídeo em tempo real), **Web Audio API** (mixagem de som de microfone e tela) e **Canvas interativo** (quadro branco colaborativo) possuem suporte nativo, maduro e de alta performance nos navegadores modernos.
+- **Acesso em Rede Local (Multi-Dispositivos):** Servidores configurados para escuta externa (`0.0.0.0` e CORS dinâmico), permitindo testes e uso real simultâneo entre computadores e celulares conectados à mesma rede Wi-Fi.
 
 ### 💡 A Proposta de Valor
 - **Agilidade e Instantaneidade:** Em vez de esperar pelo horário fixo da monitoria tradicional da faculdade, o aluno pode solicitar ajuda no exato momento em que a dúvida surge.
-- **Validação Acadêmica Real:** Monitores só podem lecionar disciplinas que constem com aprovação em seu histórico acadêmico universitário validado.
+- **Validação Acadêmica Real (Parser SIGAA):** Monitores só podem lecionar disciplinas em que comprovem aprovação através da importação de seu histórico escolar oficial.
 - **Segurança Transacional (Custódia/Escrow):** O pagamento via Pix fica retido pela plataforma e só é liberado para o monitor após o término satisfatório da sessão.
 - **Ambiente Imersivo de Aprendizado:** Sala virtual com vídeo, áudio, chat, quadro branco colaborativo e controle de tempo com extensão flexível.
+- **Auditoria e Proteção com Pré-Gravação Contínua:** Sessões são gravadas em segundo plano para proteção de ambas as partes. Se a dúvida for sanada, a gravação é descartada; se houver contestação, o vídeo é enviado para a equipe de moderação.
 
 ---
 
-## 📍 Estágio do Projeto
-
-Atualmente, o projeto encontra-se no **Estágio 1: Planejamento, Arquitetura e Engenharia de Requisitos**.
+## 🚀 Funcionalidades Implementadas
 
 ```mermaid
-flowchart LR
-    A["Fase 1: Concepção & Requisitos (ATUAL)"] --> B["Fase 2: Prototipação UI/UX & Modelagem"]
-    B --> C["Fase 3: MVP Core (Auth & Matchmaking)"]
-    C --> D["Fase 4: Sala Virtual & Pagamentos"]
-    D --> E["Fase 5: Testes, Validação & Expansão"]
+flowchart TD
+    A["Aluno abre Chamado (Matéria, Tópico, Valor Pix)"] --> B["Feed em Tempo Real (WebSockets)"]
+    B --> C["Monitor visualiza e Aceita o Chamado"]
+    C --> D["Chat Pré-Chamada (Alinhamento & Agendamento)"]
+    D --> E["Início da Sala Virtual P2P (WebRTC)"]
+    E --> F["Monitoria com Vídeo, Tela c/ Áudio e Quadro Branco"]
+    F --> G{"Avaliação Exclusiva do Aluno"}
+    G -- "Dúvida Sanada (1 a 5 estrelas)" --> H["Pix Liberado ao Monitor & Gravação Descartada"]
+    G -- "Dúvida Não Sanada (Contestação)" --> I["Disputa Aberta: Vídeo Anexado para Auditoria & Custódia Congelada"]
 ```
 
-- [x] Levantamento de regras de negócio e proposta de valor.
-- [x] Mapeamento inicial de funcionalidades e arquitetura preliminar.
-- [ ] Modelagem de banco de dados e diagramas arquiteturais.
-- [ ] Wireframes e protótipo interativo no Penpot / Excalidraw.
-- [ ] Implementação do Core (Autenticação, Perfis e Catálogo).
+### 👥 1. Autenticação, Perfis e Alternância de Papel
+- Cadastro diferenciado com validação de CPF e checagem de e-mail institucional UFABC (`@aluno.ufabc.edu.br`).
+- Criptografia de senhas com `bcryptjs` e emissão de tokens JWT com expiração configurável.
+- **Alternância Dinâmica de Perfil (Aluno ⇄ Monitor):** O usuário pode trocar entre o modo Aluno e o modo Monitor com um clique na interface sem necessidade de múltiplos cadastros.
 
----
+### 📄 2. Leitor Inteligente de Histórico Escolar (UFABC SIGAA)
+- **Parser de Histórico em PDF:** O monitor faz upload do PDF oficial emitido pelo SIGAA da UFABC.
+- O sistema processa o documento via `pdf-parse`, identifica o aluno, o curso, as disciplinas cursadas, os conceitos obtidos (`A`, `B`, `C`, `D`) e o status de aprovação.
+- As matérias aprovadas são vinculadas automaticamente ao perfil do monitor no banco de dados, liberando-o para atender solicitações daquelas disciplinas.
 
-## 🚀 Estágios do Projeto (Roadmap de Desenvolvimento)
+### 💬 3. Matchmaking & Chat de Agendamento Pré-Chamada
+- **Feed em Tempo Real:** Solicitações de monitoria abertas são transmitidas instantaneamente via WebSockets para os monitores credenciados.
+- **Chat Pré-Chamada com Agendamento:** Ao aceitar uma solicitação, o monitor não é jogado diretamente na chamada: abre-se um chat dedicado em tempo real onde monitor e aluno combinam dia, horário e detalhes da aula.
+- **Botão de Iniciar Chamada:** Ambos os participantes contam com atalho direto dentro do chat para ingressar na sala virtual quando chegar o momento combinado.
 
-Para garantir previsibilidade e entregas contínuas durante o ciclo universitário, o projeto está estruturado em 5 fases:
+### 🎥 4. Sala Virtual de Monitoria (WebRTC P2P)
+- **Streaming P2P de Baixa Latência:** Áudio e vídeo direto entre os participantes via `RTCPeerConnection` nativo com sinalização por WebSockets e servidores STUN do Google.
+- **Compartilhamento de Tela Estilo Discord:**
+  - Suporte à escolha de **Tela Inteira**, **Janela de Aplicativo Específica** (ex: VS Code, leitor de PDF, terminal) ou **Guia do Navegador**.
+  - **Mixagem de Áudio em Tempo Real:** Utiliza a Web Audio API (`AudioContext` + `createMediaStreamDestination`) para mixar o áudio do microfone com o áudio do sistema/aplicativo transmitido, permitindo que o parceiro escute a voz e o som da máquina simultaneamente.
+  - Badges visuais indicando status da transmissão e presença de áudio da janela.
+- **Quadro Branco Colaborativo com Foco Dinâmico:**
+  - Alternância entre **Foco no Vídeo** e **Foco no Quadro Branco**, mantendo **ambos os fluxos montados permanentemente no DOM** (evitando quedas de WebRTC, recargas de áudio ou perda de traços na lousa).
+  - Cores temáticas da UFABC, espessuras de traço, borracha, limpeza e download da lousa em PNG.
+  - Histórico de traços sincronizado via WebSockets (`ROOM_DRAW`, `ROOM_CLEAR_BOARD`).
+- **Chat Integrado na Chamada (`ROOM_CHAT`):** Mensagens instantâneas durante a explicação sem sair da chamada.
+- **Controles de Mídia:** Botões para silenciar microfone, desligar câmera, interromper compartilhamento e mutar o som geral da sala.
 
-### 🔹 Fase 1: Arquitetura & Especificação (Fase Atual)
-- Validação das regras de negócio (taxas, mediação de disputas, plantão).
-- Definição da stack tecnológica definitiva e infraestrutura de mensageria em tempo real.
-- Estruturação do banco de dados (Entidades: Usuário, Matéria, Solicitação, Sessão, Transação, Ticket).
+### 🛡️ 5. Pré-Gravação de Segurança, Avaliação e Ouvidoria
+- **Gravação Contínua em Segundo Plano:** Assim que a sala é aberta, um `MediaRecorder` grava o fluxo de conformidade.
+- **Fluxo Exclusivo de Finalização pelo Aluno:**
+  - O aluno é o único com permissão para acionar a avaliação de encerramento da monitoria.
+  - **Se a dúvida foi sanada:** O aluno avalia o atendimento (1 a 5 estrelas) com feedback opcional. A gravação temporária é descartada e o Pix em custódia é liberado para o monitor.
+  - **Se a dúvida NÃO foi sanada:** O aluno relata o motivo da insatisfação. O sistema anexa automaticamente o arquivo de vídeo da gravação e gera um Ticket de Disputa (`DisputeTicket`), congelando o repasse e enviando a evidência para auditoria da coordenação.
+  - **Fechamento Automático:** Ao concluir a avaliação, um evento `CALL_ENDED_BY_STUDENT` encerra a sala automaticamente para o monitor.
 
-### 🔹 Fase 2: Identidade Visual & Prototipação
-- Design System Web responsivo (otimizado para navegadores em desktop, tablets e smartphones).
-- Prototipação de telas de solicitação, painel do monitor (plantão) e sala de monitoria interativa.
-- Validação de usabilidade com usuários reais da faculdade.
-
-### 🔹 Fase 3: MVP Core (Autenticação, Perfis e Matchmaking)
-- Cadastro diferenciado (Aluno e Monitor) com validação de CPF e upload de histórico acadêmico.
-- Catálogo de matérias e motor de busca por equivalência de grades.
-- Quadro de solicitações abertas em tempo real (WebSockets).
-
-### 🔹 Fase 4: Sala de Monitoria & Transacional
-- Integração de vídeo/áudio e quadro branco colaborativo.
-- Timer de sessão e sistema de solicitação de extensão de tempo.
-- Integração de pagamento via Pix com custódia provisória (escrow) e liberação pós-avaliação.
-- Sistema de tickets e mediação de reclamações.
-
-### 🔹 Fase 5: Refinamento & Funcionalidades Avançadas
-- Sistema de Ranking dinâmico para monitores.
-- Modo Plantão com cálculo dinâmico de participantes.
-- *Possibilidade de expansão:* Modo Aulão e solicitação de correção de listas de exercícios.
-- Empacotamento em PWA / migração para aplicativo mobile se houver margem no cronograma.
-
----
-
-## ⚙️ Funcionalidades Mapeadas
-
-### 👥 1. Gestão de Usuários e Segurança
-- **Acesso Aluno:** Cadastro com validação de e-mail institucional/pessoal e validação de CPF.
-- **Acesso Monitor:**
-  - Validação de histórico escolar/universitário (limita as matérias que o monitor está apto a lecionar).
-  - Validação de e-mail e CPF.
-  - Perfil com estatísticas de atendimento e avaliações.
-
-### 📚 2. Catálogo e Tradução de Matérias
-- Cadastro pré-carregado a partir dos históricos validados.
-- Tradução de equivalências curriculares entre cursos/grades (Ex: *Bases Matemáticas* ⇄ *Cálculo Diferencial e Integral I*).
-- Fluxo para solicitação de inclusão de novas disciplinas ou revisão de equivalências.
-
-### 🎯 3. Solicitação de Monitoria ("Estilo Uber")
-- **Visão do Aluno:**
-  - Abertura de chamado selecionando matéria, tópico da dúvida, duração estimada e observações.
-  - Pagamento antecipado retido em garantia (escrow).
-  - Notificação inteligente caso um monitor compatível abra plantão daquela disciplina.
-- **Visão do Monitor:**
-  - Feed em tempo real de chamados disponíveis com matéria, duração, valor líquido a receber e observações.
-  - Aceite de solicitação com início imediato do fluxo da sessão.
-
-### 🚨 4. Modo Plantão
-- O monitor ativa o modo online/plantão indicando quais matérias deseja atender no momento.
-- Alunos visualizam monitores online e ingressam diretamente no plantão com cobrança proporcional/tabelada.
-- Rateio e bonificação calculados conforme volume de participantes e matérias atendidas.
-
-### 💻 5. Sala de Monitoria Virtual
-- **Comunicação Multimídia:** Chamada de vídeo e áudio individualizada de baixa latência.
-- **Quadro Branco (Whiteboard):** Espaço compartilhado para resolução de cálculos, diagramas e fórmulas em tempo real.
-- **Chat de Texto & Anexos:** Troca rápida de links, imagens de enunciados e mensagens.
-- **Timer de Sessão:** Contagem regressiva visível para ambos os lados, com mecanismo de extensão de tempo mediante aceite bilateral e cobrança complementar.
-
-### 💳 6. Pagamentos, Avaliação e Ouvidoria
-- **Pagamento via Pix:** Geração de QR Code dinâmico; valor mantido em custódia na plataforma.
-- **Liberação do Saldo:** Conclusão da monitoria + avaliação do aluno.
-- **Sistema de Disputas (Tickets):** Em caso de má conduta ou sessão insatisfatória, o aluno abre um ticket; o repasse ao monitor é congelado e a administração analisa o log da sessão.
-- **Ranking & Reputação:** Gamificação baseada no feedback dos alunos para destaque no catálogo e bonificação de taxas da plataforma.
+### 🧪 6. Laboratório de Testes de Chamada (Modo Demonstração)
+- Disponível diretamente no painel do aluno e do monitor através do botão **"🧪 Testar Chamada"**.
+- Permite experimentar toda a experiência da sala virtual (câmera, microfone, medidor VU, quadro branco, compartilhamento de tela com áudio e fluxo de disputa) sem necessidade de um segundo usuário online.
 
 ---
 
 ## 🛠️ Ferramentas e Stack Tecnológica (100% Open Source)
 
-Em atendimento às diretrizes acadêmicas do projeto, **toda a stack e ferramental adotados são estritamente de código aberto (Open Source)**, sem dependência de plataformas proprietárias ou serviços pagos fechados:
-
-| Camada | Tecnologia / Ferramenta Open Source | Licença | Justificativa |
+| Camada | Tecnologia / Ferramenta Open Source | Licença | Finalidade no Projeto |
 | :--- | :--- | :--- | :--- |
-| **Frontend** | React / Next.js (TypeScript) + Tailwind CSS | MIT | Framework moderno, declarativo e altamente produtivo para interfaces web responsivas. |
-| **Backend & APIs** | Node.js (NestJS ou Fastify) | MIT | Ambiente assíncrono de alta performance para I/O com suporte nativo a WebSockets. |
-| **Comunicação Real-Time** | Socket.io / WebSockets nativo | MIT | Protocolo bidirecional aberto para atualização de chamados, status de plantão e chat. |
-| **Vídeo & Áudio (P2P)** | WebRTC nativo (com PeerJS / Simple-Peer ou Jitsi Meet OSS) | MIT / Apache 2.0 | Transmissão de áudio e vídeo P2P criptografada diretamente no navegador sem custos de infraestrutura proprietária. |
-| **Quadro Branco (Whiteboard)** | Excalidraw / Tldraw | MIT / Apache 2.0 | Bibliotecas abertas completas para integração de tela de desenho vetorial colaborativo. |
-| **Banco de Dados** | PostgreSQL + Prisma ORM | PostgreSQL / Apache 2.0 | Banco relacional robusto com integridade transacional ACID para pagamentos e históricos. |
-| **Cache & Mensageria** | Valkey / Redis OSS | BSD-3-Clause | Gerenciamento ultrarrápido em memória para presença online de monitores e filas de chamados. |
-| **Módulo Pix & Custódia** | Biblioteca de Geração EMV Pix (ex: `pix-payload` / `qrcode`) + Motor Interno de Custódia | MIT | Implementação aberta das especificações oficiais do Banco Central para emissão de Pix Copia e Cola/QR Code dinâmico com custódia (escrow) gerenciada internamente. |
-| **Design & Prototipação** | Penpot / Excalidraw | MPL-2.0 / MIT | **Penpot** é a principal plataforma livre e web (open-source) para UI/UX design e protótipos de interfaces, eliminando a dependência do Figma. |
-| **Planejamento de Tarefas** | Planka / Taiga (ou Git Issues/Projects) | AGPL-3.0 / Apache 2.0 | Gestão visual ágil de tarefas e sprints sem depender de ferramentas fechadas. |
+| **Frontend** | Next.js 14 (App Router) + React 18 + Tailwind CSS | MIT | Interface web responsiva, otimizada para desktop e mobile. |
+| **Ícones & UI** | Lucide React | ISC | Conjunto leve e consistente de ícones da interface. |
+| **Backend & APIs** | Node.js + Fastify 4 (TypeScript) | MIT | Framework web de alta performance para rotas REST e WebSockets. |
+| **Comunicação em Tempo Real** | `@fastify/websocket` (WebSocket nativo) | MIT | Sincronização P2P (ofertas/respostas SDP, candidatos ICE, chat, lousa e status). |
+| **Áudio, Vídeo & Tela** | WebRTC Nativo + Web Audio API (`AudioContext`) | W3C / MIT | Conexão P2P criptografada e mixagem de áudio da tela com microfone. |
+| **Parser de Documentos** | `pdf-parse` | MIT | Extração e leitura automatizada do histórico escolar oficial do SIGAA UFABC. |
+| **Banco de Dados** | PostgreSQL 16 (via Docker) + Prisma ORM 5 | PostgreSQL / Apache 2.0 | Persistência relacional com integridade ACID para usuários, sessões e custódia. |
+| **Cache & Presença** | Valkey 7 / Redis OSS (via Docker) | BSD-3-Clause | Gerenciamento de sessões e presença de usuários online. |
+| **Segurança & Criptografia** | `bcryptjs` + `@fastify/jwt` | MIT | Hash de senhas e autenticação por tokens stateless. |
+| **Testes Automatizados** | Vitest 5 | MIT | Testes unitários e de integração de serviços e parsers. |
 
 ---
 
 ## 📋 Pré-requisitos e Execução Local
 
 ### 1️⃣ Pré-requisitos
-- **Node.js LTS** (v20+ ou v24+) instalado
-- **Docker Desktop** instalado e em execução
+- **Node.js LTS** (v20+ ou v24+) instalado.
+- **Docker Desktop** instalado e em execução.
 
-### 2️⃣ Inicialização Completa em 1 Comando
-
-Para rodar todo o ecossistema (banco PostgreSQL, Redis, Back-end e Front-end simultaneamente):
+### 2️⃣ Inicialização Completa
 
 ```bash
 # 1. Clone o repositório
 git clone https://github.com/GabrYelM/hintlink.git
 cd hintlink
 
-# 2. Suba o banco de dados e o cache com o Docker
+# 2. Instale as dependências (raiz, backend e frontend)
+npm run install:all
+
+# 3. Suba o banco de dados PostgreSQL e o Redis via Docker
 npm run services:up
 
-# 3. Inicie o Back-end e o Front-end juntos no mesmo terminal:
+# 4. Aplique as migrações do banco de dados (no diretório backend)
+cd backend
+npx prisma migrate dev
+cd ..
+
+# 5. Inicie o Back-end e o Front-end juntos no mesmo terminal:
 npm run dev
 ```
 
 O comando unificado `npm run dev` inicializa:
-- 🔵 **Back-end:** `http://localhost:3333` (Swagger em `/docs` e WebSockets em `/ws`)
+- 🔵 **Back-end:** `http://localhost:3333` (Documentação Swagger em `/docs` e WebSockets em `/ws`)
 - 🟢 **Front-end:** `http://localhost:3000`
 
-### 🛠️ Scripts Úteis Disponíveis na Raiz
-- `npm run dev`: Inicia Back-end e Front-end em paralelo com logs coloridos.
-- `npm run services:up`: Sobe os containers do PostgreSQL e Redis (`docker compose up -d`).
-- `npm run services:down`: Desliga os containers do Docker.
-- `npm run dev:back`: Inicia apenas o Back-end.
-- `npm run dev:front`: Inicia apenas o Front-end.
+---
+
+## 🌐 Como Acessar de Outros Computadores (Rede Local / LAN)
+
+O Hintlink foi preparado para permitir testes simultâneos entre múltiplos computadores ou celulares na mesma rede Wi-Fi:
+
+1. **Descubra o endereço IP local da máquina servidora:**
+   * No Windows, abra o PowerShell e digite:
+     ```powershell
+     ipconfig
+     ```
+   * Localize o **IPv4** do seu adaptador Wi-Fi ou Ethernet (exemplo: `192.168.0.157`).
+
+2. **No outro computador ou smartphone conectado ao mesmo Wi-Fi:**
+   * Abra o navegador e acesse:
+     ```text
+     http://192.168.0.157:3000
+     ```
+   *(Substitua `192.168.0.157` pelo IP real da sua máquina servidora).*
+
+3. **Dica de Firewall (Windows):**
+   * Caso o outro computador não consiga carregar a página, certifique-se de permitir o Node.js no Firewall do Windows ou adicione uma regra para as portas `3000` (Next.js) e `3333` (Fastify).
+
+---
+
+## 🧪 Testes e Qualidade
+
+O projeto conta com suíte de testes automatizados utilizando **Vitest**:
+
+```bash
+# Executa todos os testes unitários e de integração
+npm test
+```
+
+### Cobertura Atual dos Testes:
+* `src/modules/requests/requests.spec.ts`: Criação e busca de chamados de monitoria em tempo real.
+* `src/modules/sessions/sessions.spec.ts`: Aceite de monitoria, finalização com custódia Pix e abertura de tickets de contestação.
+* `src/shared/utils/transcript-parser.spec.ts`: Validação e extração precisa de disciplinas, notas e conceitos do histórico oficial da UFABC.
+
+---
+
+## 🛠️ Scripts Úteis no Workspace
+
+| Comando | Descrição |
+| :--- | :--- |
+| `npm run dev` | Inicia o Back-end e o Front-end simultaneamente com logs coloridos. |
+| `npm run services:up` | Sobe os containers Docker do PostgreSQL e Redis (`docker compose up -d`). |
+| `npm run services:down` | Pausa os containers do Docker. |
+| `npm run test` | Executa a suíte de testes com Vitest no backend. |
+| `npm run build:all` | Compila o backend com `tsup` e o frontend com `next build`. |
+| `npm run dev:back` | Executa apenas o servidor Back-end Fastify. |
+| `npm run dev:front` | Executa apenas o servidor Front-end Next.js. |
 
 ---
 
 ## 👥 Equipe do Projeto
 
-Desenvolvido como projeto universitário para resolução do gargalo de apoio acadêmico e monitoria entre pares.
+Desenvolvido como projeto universitário para a UFABC focado na modernização, segurança e resolução do gargalo de apoio acadêmico e monitoria entre pares.
 
 ---
 
