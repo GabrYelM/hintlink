@@ -2,8 +2,12 @@ import fastify from 'fastify'
 import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import websocket from '@fastify/websocket'
+import fastifyMultipart from '@fastify/multipart'
+import fastifyStatic from '@fastify/static'
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
+import path from 'node:path'
+import fs from 'node:fs'
 import { ZodError } from 'zod'
 import { AppError } from './shared/errors/app-error.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
@@ -27,6 +31,22 @@ app.register(jwt, {
 })
 
 app.register(websocket)
+
+app.register(fastifyMultipart, {
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB para históricos e gravações em vídeo
+  },
+})
+
+const uploadsPath = path.resolve(process.cwd(), 'uploads')
+if (!fs.existsSync(uploadsPath)) {
+  fs.mkdirSync(uploadsPath, { recursive: true })
+}
+
+app.register(fastifyStatic, {
+  root: uploadsPath,
+  prefix: '/uploads/',
+})
 
 // Documentação Swagger / OpenAPI
 app.register(fastifySwagger, {

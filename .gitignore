@@ -36,6 +36,9 @@ coverage/
 *.pdf
 *.ai
 *.psd
+historico*.pdf
+uploads/
+backend/uploads/
 
 # Arquivos de Sistema Operacional
 .DS_Store

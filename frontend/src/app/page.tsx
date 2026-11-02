@@ -6,7 +6,8 @@ import { HintlinkLogo } from '@/components/HintlinkLogo'
 import { StudentDashboard } from '@/components/StudentDashboard'
 import { TutorDashboard } from '@/components/TutorDashboard'
 import { ProfileModal } from '@/components/ProfileModal'
-import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2, LogOut } from 'lucide-react'
+import { VirtualRoom } from '@/components/VirtualRoom'
+import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2, LogOut, Sparkles } from 'lucide-react'
 import axios from 'axios'
 
 interface UserProfile {
@@ -37,6 +38,7 @@ export default function Home() {
   const [loggedUser, setLoggedUser] = useState<UserProfile | null>(null)
   const [initializing, setInitializing] = useState(true)
   const [isProfileOpen, setIsProfileOpen] = useState(false)
+  const [isDemoRoomOpen, setIsDemoRoomOpen] = useState(false)
 
   // Verifica se o usuário já estava logado ao abrir o site
   useEffect(() => {
@@ -140,7 +142,15 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsDemoRoomOpen(true)}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-yellow/20 hover:bg-brand-yellow/30 text-brand-dark border border-brand-yellow/40 text-xs font-black transition-all"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-brand-purple" />
+              <span>Testar Chamada (Demo)</span>
+            </button>
+
             {loggedUser ? (
               <div className="flex items-center gap-3">
                 <button
@@ -415,6 +425,21 @@ export default function Home() {
           onUserUpdated={(updatedUser) => {
             setLoggedUser(updatedUser)
           }}
+        />
+      )}
+
+      {isDemoRoomOpen && (
+        <VirtualRoom
+          sessionId="demo-ufabc-room-1"
+          currentUser={
+            loggedUser || {
+              id: 'guest-tester',
+              name: 'Universitário Visitante',
+              role: 'STUDENT',
+            }
+          }
+          isDemoMode={true}
+          onClose={() => setIsDemoRoomOpen(false)}
         />
       )}
 

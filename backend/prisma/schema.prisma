@@ -88,6 +88,7 @@ model AcademicRecord {
   userId           String
   subjectId        String
   grade            Float?
+  concept          String?   // Ex: "A", "B", "C", "D"
   proofDocumentUrl String?
   isApproved       Boolean   @default(false)
   validatedAt      DateTime?
@@ -164,6 +165,7 @@ model DisputeTicket {
   sessionId      String        @unique
   openedByUserId String
   reason         String
+  recordingUrl   String?       // Caminho da gravação pré-salva para auditoria
   status         DisputeStatus @default(OPEN)
   adminNotes     String?
   createdAt      DateTime      @default(now())

@@ -1,5 +1,11 @@
 import { FastifyInstance } from 'fastify'
-import { finishSession, getActiveSession, getSession, openDispute } from './sessions.controller.js'
+import {
+  finishSession,
+  getActiveSession,
+  getSession,
+  openDispute,
+  disputeWithRecording,
+} from './sessions.controller.js'
 import { verifyJwt } from '../../shared/middlewares/verify-jwt.js'
 
 export async function sessionsRoutes(app: FastifyInstance) {
@@ -57,5 +63,19 @@ export async function sessionsRoutes(app: FastifyInstance) {
       },
     },
     openDispute
+  )
+
+  app.post(
+    '/sessions/:id/dispute-with-recording',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Sessões & Sala Virtual'],
+        summary: 'Abrir ticket de reclamação anexando a gravação da videochamada',
+        description: 'Envia o vídeo pré-gravado da chamada para ser auditado pela equipe do Hintlink caso a dúvida não tenha sido sanada.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    disputeWithRecording
   )
 }

@@ -4,6 +4,8 @@ import { AcademicRecordsRepository } from './academic-records.repository.js'
 import { SubjectsRepository } from '../subjects/subjects.repository.js'
 import { UsersRepository } from '../users/users.repository.js'
 import { AddTutorSubjectService } from './add-tutor-subject.service.js'
+import { ImportTranscriptService } from './import-transcript.service.js'
+import { AppError } from '../../shared/errors/app-error.js'
 
 export async function addTutorSubject(request: FastifyRequest, reply: FastifyReply) {
   const addSubjectBodySchema = z.object({
@@ -42,5 +44,30 @@ export async function getTutorSubjects(request: FastifyRequest, reply: FastifyRe
 
   return reply.status(200).send({
     records,
+  })
+}
+
+export async function uploadTranscript(request: FastifyRequest, reply: FastifyReply) {
+  const file = await request.file()
+
+  if (!file) {
+    throw new AppError('Nenhum arquivo enviado. Selecione o arquivo PDF do seu histórico escolar.', 400)
+  }
+
+  if (file.mimetype !== 'application/pdf') {
+    throw new AppError('Formato inválido. Apenas arquivos PDF são aceitos.', 400)
+  }
+
+  const buffer = await file.toBuffer()
+  const importService = new ImportTranscriptService()
+
+  const result = await importService.execute({
+    userId: request.user.sub,
+    pdfBuffer: buffer,
+  })
+
+  return reply.status(200).send({
+    message: `Histórico validado com sucesso! ${result.totalApproved} matérias aprovadas foram vinculadas ao seu perfil.`,
+    ...result,
   })
 }

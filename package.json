@@ -10,6 +10,7 @@
     "services:up": "docker compose up -d",
     "services:down": "docker compose stop",
     "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
+    "test": "npm run test --prefix backend",
     "build:all": "npm run build --prefix backend && npm run build --prefix frontend"
   },
   "devDependencies": {

@@ -1,9 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '@/services/api'
-import { Bell, CheckCircle2, Clock, DollarSign, BookOpen, UserCheck, AlertTriangle } from 'lucide-react'
+import {
+  Bell,
+  CheckCircle2,
+  Clock,
+  DollarSign,
+  BookOpen,
+  UserCheck,
+  AlertTriangle,
+  UploadCloud,
+  FileText,
+  Video,
+  Sparkles,
+} from 'lucide-react'
 import axios from 'axios'
+import { VirtualRoom } from './VirtualRoom'
 
 interface OpenRequest {
   id: string
@@ -28,6 +41,7 @@ interface TutorRecord {
   id: string
   isApproved: boolean
   grade?: number
+  concept?: string
   subject: {
     id: string
     code: string
@@ -35,10 +49,12 @@ interface TutorRecord {
   }
 }
 
-interface AllSubject {
+interface ActiveSessionData {
   id: string
-  code: string
-  name: string
+  status: string
+  studentId?: string
+  tutorId?: string
+  durationMinutes?: number
 }
 
 interface TutorUser {
@@ -54,71 +70,90 @@ interface TutorUser {
 export function TutorDashboard({ user }: { user: TutorUser }) {
   const [openRequests, setOpenRequests] = useState<OpenRequest[]>([])
   const [mySubjects, setMySubjects] = useState<TutorRecord[]>([])
-  const [allSubjects, setAllSubjects] = useState<AllSubject[]>([])
-  const [selectedSubjectToAdd, setSelectedSubjectToAdd] = useState('')
-  const [tutorGrade, setTutorGrade] = useState(8.5)
   const [loadingAction, setLoadingAction] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [reqRes, mySubRes, allSubRes] = await Promise.all([
-          api.get('/requests/open'),
-          api.get('/tutors/subjects'),
-          api.get('/subjects'),
-        ])
-        setOpenRequests(reqRes.data.requests || [])
-        setMySubjects(mySubRes.data.records || [])
-        setAllSubjects(allSubRes.data.subjects || [])
-        if (allSubRes.data.subjects?.length > 0) {
-          setSelectedSubjectToAdd(allSubRes.data.subjects[0].id)
-        }
-      } catch (err) {
-        console.error('Erro ao carregar dados do dashboard do monitor:', err)
-      }
+  // Upload Histórico State
+  const [isUploadingTranscript, setIsUploadingTranscript] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Active Session & Virtual Room
+  const [activeSession, setActiveSession] = useState<ActiveSessionData | null>(null)
+  const [isVirtualRoomOpen, setIsVirtualRoomOpen] = useState(false)
+  const [isDemoRoomOpen, setIsDemoRoomOpen] = useState(false)
+
+  async function loadData() {
+    try {
+      const [reqRes, mySubRes, activeRes] = await Promise.all([
+        api.get('/requests/open'),
+        api.get('/tutors/subjects'),
+        api.get('/sessions/active').catch(() => ({ data: { session: null } })),
+      ])
+      setOpenRequests(reqRes.data.requests || [])
+      setMySubjects(mySubRes.data.records || [])
+      setActiveSession(activeRes.data?.session || null)
+    } catch (err) {
+      console.error('Erro ao carregar dados do dashboard do monitor:', err)
     }
+  }
+
+  useEffect(() => {
     loadData()
   }, [])
 
-  async function handleAddSubject(e: React.FormEvent) {
-    e.preventDefault()
+  // Upload e Parsing do Histórico Escolar Oficial em PDF
+  async function handleTranscriptUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (file.type !== 'application/pdf') {
+      setFeedback({
+        type: 'error',
+        message: 'Por favor, selecione um arquivo no formato PDF.',
+      })
+      return
+    }
+
+    setIsUploadingTranscript(true)
     setFeedback(null)
 
     try {
-      const response = await api.post('/tutors/subjects', {
-        subjectId: selectedSubjectToAdd,
-        grade: Number(tutorGrade),
-      })
+      const formData = new FormData()
+      formData.append('file', file)
 
-      const added = allSubjects.find((s) => s.id === selectedSubjectToAdd)
-      if (added) {
-        setMySubjects((prev) => [
-          ...prev,
-          {
-            id: response.data.academicRecord.id,
-            isApproved: true,
-            grade: Number(tutorGrade),
-            subject: added,
-          },
-        ])
-      }
+      const response = await api.post('/tutors/upload-transcript', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      })
 
       setFeedback({
         type: 'success',
-        message: 'Matéria vinculada com sucesso ao seu histórico de monitor!',
+        message:
+          response.data.message ||
+          'Histórico processado com sucesso! Suas matérias aprovadas foram validadas.',
       })
+
+      // Recarrega as matérias aprovadas
+      await loadData()
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         setFeedback({
           type: 'error',
-          message: err.response?.data?.message || 'Falha ao vincular matéria.',
+          message:
+            err.response?.data?.message ||
+            'Erro ao processar histórico escolar. Verifique se o CPF do PDF é o mesmo do seu cadastro.',
         })
       } else {
         setFeedback({
           type: 'error',
-          message: 'Erro inesperado ao vincular matéria.',
+          message: 'Erro inesperado ao enviar arquivo.',
         })
+      }
+    } finally {
+      setIsUploadingTranscript(false)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
       }
     }
   }
@@ -128,18 +163,22 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
     setFeedback(null)
 
     try {
-      await api.patch(`/requests/${requestId}/accept`)
+      const response = await api.patch(`/requests/${requestId}/accept`)
       setFeedback({
         type: 'success',
         message: 'Você aceitou a monitoria! A sala virtual e a custódia Pix foram ativadas.',
       })
       // Remove da lista de chamados abertos
       setOpenRequests((prev) => prev.filter((r) => r.id !== requestId))
+      setActiveSession(response.data.session)
+      setIsVirtualRoomOpen(true)
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         setFeedback({
           type: 'error',
-          message: err.response?.data?.message || 'Erro ao aceitar chamado. Verifique seu histórico.',
+          message:
+            err.response?.data?.message ||
+            'Erro ao aceitar chamado. Verifique se você possui esta matéria aprovada em seu histórico.',
         })
       } else {
         setFeedback({
@@ -164,23 +203,45 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
             Pronto para atender, {user.name.split(' ')[0]}?
           </h2>
           <p className="text-sm text-white/80 mt-1 max-w-xl">
-            Aceite chamados estilo Uber de matérias aprovadas no seu histórico. Os pagamentos Pix caem em custódia garantida.
+            Aceite chamados estilo Uber de matérias aprovadas no seu histórico escolar. Os pagamentos Pix caem em custódia garantida.
           </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="bg-white/10 backdrop-blur-md px-4 py-3 rounded-2xl border border-white/20 text-center">
             <span className="block text-xs uppercase tracking-wider text-white/70 font-semibold">Reputação</span>
             <span className="text-lg font-black text-brand-yellow">{user.rating} ★ ({user.totalReviews})</span>
           </div>
-          <div className="bg-white/10 backdrop-blur-md px-4 py-3 rounded-2xl border border-white/20 text-center">
-            <span className="block text-xs uppercase tracking-wider text-white/70 font-semibold">Status</span>
-            <span className="text-xs font-bold text-emerald-400 flex items-center justify-center gap-1 mt-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              Modo Plantão Ativo
-            </span>
-          </div>
+
+          {/* Botão de Teste Rápido da Chamada */}
+          <button
+            onClick={() => setIsDemoRoomOpen(true)}
+            className="px-4 py-3 rounded-2xl bg-brand-purple hover:bg-purple-700 text-white font-extrabold text-xs flex items-center gap-2 shadow-lg shadow-purple-900/30 transition-all border border-purple-400/30"
+          >
+            <Sparkles className="w-4 h-4 text-brand-yellow" />
+            <span>Testar Chamada (Demo)</span>
+          </button>
         </div>
       </div>
+
+      {/* Alerta de Sessão Ativa */}
+      {activeSession && (
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-2xl p-4 text-white shadow-lg flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="h-3 w-3 rounded-full bg-white animate-ping"></span>
+            <div>
+              <h4 className="font-extrabold text-sm">Você possui uma monitoria em andamento!</h4>
+              <p className="text-xs text-white/80">O aluno está aguardando na sala virtual com custódia Pix retida.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsVirtualRoomOpen(true)}
+            className="px-5 py-2.5 rounded-xl bg-white text-emerald-800 font-black text-xs hover:bg-slate-100 shadow-md flex items-center gap-2 transition-all"
+          >
+            <Video className="w-4 h-4" />
+            <span>Entrar na Sala de Aula</span>
+          </button>
+        </div>
+      )}
 
       {feedback && (
         <div
@@ -269,73 +330,94 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
           )}
         </div>
 
-        {/* Gerenciamento de Matérias Aptas / Histórico */}
+        {/* Gerenciamento de Matérias Baseadas em Histórico Escolar Oficial */}
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-            <h3 className="font-extrabold text-base text-brand-blue mb-4 flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-brand-purple" />
-              Suas Matérias Aptas
-            </h3>
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-5">
+            <div>
+              <h3 className="font-extrabold text-base text-brand-blue flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-brand-purple" />
+                Matérias Habilitadas
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Suas matérias são validadas automaticamente pelo seu Histórico Escolar oficial.
+              </p>
+            </div>
 
+            {/* Upload do Histórico PDF Oficial */}
+            <div className="p-4 rounded-2xl bg-brand-light border-2 border-dashed border-brand-purple/30 text-center space-y-3">
+              <UploadCloud className="w-8 h-8 mx-auto text-brand-purple" />
+              <div>
+                <p className="text-xs font-extrabold text-brand-blue">
+                  Importar Histórico Escolar (PDF)
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Reconhecimento de notas e validação por CPF (SIGAA UFABC).
+                </p>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                onChange={handleTranscriptUpload}
+              />
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploadingTranscript}
+                className="w-full py-2.5 rounded-xl bg-brand-purple hover:bg-purple-700 text-white font-extrabold text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <FileText className="w-4 h-4" />
+                <span>{isUploadingTranscript ? 'Lendo e Validando PDF...' : 'Subir Arquivo PDF'}</span>
+              </button>
+            </div>
+
+            {/* Lista de Matérias Aptas com Conceito / Nota */}
             {mySubjects.length === 0 ? (
-              <p className="text-xs text-slate-400 mb-4">
-                Você ainda não cadastrou nenhuma matéria do seu histórico acadêmico.
+              <p className="text-xs text-slate-400 text-center py-2">
+                Nenhuma disciplina vinculada ainda. Suba o seu histórico escolar acima para se habilitar.
               </p>
             ) : (
-              <div className="space-y-2 mb-4">
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                 {mySubjects.map((sub) => (
                   <div
                     key={sub.id}
                     className="flex items-center justify-between p-2.5 rounded-xl bg-brand-light border border-slate-200 text-xs"
                   >
-                    <span className="font-bold text-brand-blue">{sub.subject.code}</span>
-                    <span className="text-slate-600 truncate max-w-[140px]">{sub.subject.name}</span>
-                    <span className="font-mono text-emerald-600 font-bold">Nota: {sub.grade || 'Aprovado'}</span>
+                    <div>
+                      <span className="font-bold text-brand-blue block">{sub.subject.code}</span>
+                      <span className="text-slate-600 truncate max-w-[150px] block text-[11px]">
+                        {sub.subject.name}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        {sub.concept ? `Conceito ${sub.concept}` : `Nota: ${sub.grade || 'Aprovado'}`}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
-
-            {/* Form para vincular matéria */}
-            <form onSubmit={handleAddSubject} className="pt-4 border-t border-slate-100 space-y-3">
-              <span className="block text-xs font-bold text-slate-700">Vincular Nova Matéria</span>
-              <select
-                value={selectedSubjectToAdd}
-                onChange={(e) => setSelectedSubjectToAdd(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-xs text-brand-dark focus:outline-none focus:border-brand-blue"
-              >
-                {allSubjects.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.code} - {s.name}
-                  </option>
-                ))}
-              </select>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                  Nota no Histórico
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="5"
-                  max="10"
-                  value={tutorGrade}
-                  onChange={(e) => setTutorGrade(Number(e.target.value))}
-                  className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-xs text-brand-dark focus:outline-none focus:border-brand-blue font-bold"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-xl bg-brand-blue hover:bg-slate-800 text-white font-bold text-xs transition-colors"
-              >
-                + Adicionar ao Histórico
-              </button>
-            </form>
           </div>
         </div>
       </div>
+
+      {/* Virtual Room Modal (Chamada Real ou Modo Teste) */}
+      {(isVirtualRoomOpen || isDemoRoomOpen) && (
+        <VirtualRoom
+          sessionId={activeSession?.id || 'demo-ufabc-room-1'}
+          currentUser={user}
+          isDemoMode={isDemoRoomOpen}
+          onClose={() => {
+            setIsVirtualRoomOpen(false)
+            setIsDemoRoomOpen(false)
+            loadData()
+          }}
+        />
+      )}
     </div>
   )
 }

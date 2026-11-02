@@ -6,12 +6,13 @@ interface OpenDisputeInput {
   sessionId: string
   userId: string
   reason: string
+  recordingUrl?: string
 }
 
 export class OpenDisputeService {
   constructor(private sessionsRepository: SessionsRepository) {}
 
-  async execute({ sessionId, userId, reason }: OpenDisputeInput) {
+  async execute({ sessionId, userId, reason, recordingUrl }: OpenDisputeInput) {
     const session = await this.sessionsRepository.findById(sessionId)
 
     if (!session) {
@@ -46,6 +47,7 @@ export class OpenDisputeService {
           sessionId,
           openedByUserId: userId,
           reason,
+          recordingUrl,
           status: 'OPEN',
         },
       })
