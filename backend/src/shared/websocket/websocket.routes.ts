@@ -122,6 +122,12 @@ export async function websocketRoutes(app: FastifyInstance) {
             return
           }
 
+          // Notificação de Compartilhamento de Tela & Áudio
+          if (type === 'ROOM_SCREEN_SHARE_CHANGED' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'ROOM_SCREEN_SHARE_CHANGED', payload, socket)
+            return
+          }
+
           // Aluno encerrou a chamada (fecha a sala automaticamente para o monitor)
           if (type === 'CALL_ENDED_BY_STUDENT' && sessionId) {
             connectionManager.sendToRoom(sessionId, 'CALL_ENDED_BY_STUDENT', payload, socket)

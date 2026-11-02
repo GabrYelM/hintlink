@@ -72,6 +72,9 @@ export function VirtualRoom({
   const [isVideoEnabled, setIsVideoEnabled] = useState(true)
   const [isAudioEnabled, setIsAudioEnabled] = useState(true)
   const [isScreenSharing, setIsScreenSharing] = useState(false)
+  const [screenHasAudio, setScreenHasAudio] = useState(false)
+  const [isRemoteScreenSharing, setIsRemoteScreenSharing] = useState(false)
+  const [remoteHasScreenAudio, setRemoteHasScreenAudio] = useState(false)
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false)
   const [audioVolumeLevel, setAudioVolumeLevel] = useState(0) // 0 to 100 for VU meter
   const [hasRemoteStream, setHasRemoteStream] = useState(false)
@@ -122,6 +125,9 @@ export function VirtualRoom({
   const localStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
+  const screenAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const mixedAudioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null)
+  const micAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
   const isDrawingRef = useRef(false)
   const lastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
@@ -284,6 +290,13 @@ export function VirtualRoom({
         setChatMessages((prev) => [...prev, msg.payload as ChatMessage])
       }
 
+      // Notificação de Compartilhamento de Tela & Áudio pelo Parceiro
+      if (msg.type === 'ROOM_SCREEN_SHARE_CHANGED' && msg.payload) {
+        const payload = msg.payload as { isSharing: boolean; hasAudio?: boolean }
+        setIsRemoteScreenSharing(!!payload.isSharing)
+        setRemoteHasScreenAudio(!!payload.hasAudio)
+      }
+
       // Aluno encerrou a chamada -> Monitor fecha automaticamente
       if (msg.type === 'CALL_ENDED_BY_STUDENT') {
         setAutoCloseAlert(
@@ -398,6 +411,24 @@ export function VirtualRoom({
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop()
       }
+      if (screenAudioSourceRef.current) {
+        try {
+          screenAudioSourceRef.current.disconnect()
+        } catch {}
+        screenAudioSourceRef.current = null
+      }
+      if (micAudioSourceRef.current) {
+        try {
+          micAudioSourceRef.current.disconnect()
+        } catch {}
+        micAudioSourceRef.current = null
+      }
+      if (mixedAudioDestinationRef.current) {
+        try {
+          mixedAudioDestinationRef.current.disconnect()
+        } catch {}
+        mixedAudioDestinationRef.current = null
+      }
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => track.stop())
       }
@@ -435,59 +466,162 @@ export function VirtualRoom({
     }
   }
 
-  // Toggle Screen Sharing & Replace Track in WebRTC PeerConnection
+  // Parar Compartilhamento de Tela e Restaurar Câmera / Microfone Originais
+  const stopScreenSharing = useCallback(async () => {
+    // 1. Desconectar e limpar nós do Web Audio API
+    if (screenAudioSourceRef.current) {
+      try {
+        screenAudioSourceRef.current.disconnect()
+      } catch {}
+      screenAudioSourceRef.current = null
+    }
+    if (micAudioSourceRef.current) {
+      try {
+        micAudioSourceRef.current.disconnect()
+      } catch {}
+      micAudioSourceRef.current = null
+    }
+    if (mixedAudioDestinationRef.current) {
+      try {
+        mixedAudioDestinationRef.current.disconnect()
+      } catch {}
+      mixedAudioDestinationRef.current = null
+    }
+
+    // 2. Parar tracks de tela
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop())
+      screenStreamRef.current = null
+    }
+
+    // 3. Restaurar tracks originais no WebRTC PeerConnection
+    if (peerConnectionRef.current && localStreamRef.current) {
+      const videoTrack = localStreamRef.current.getVideoTracks()[0]
+      const videoSender = peerConnectionRef.current
+        .getSenders()
+        .find((s) => s.track?.kind === 'video')
+      if (videoSender && videoTrack) {
+        await videoSender.replaceTrack(videoTrack).catch(console.warn)
+      }
+
+      const micTrack = localStreamRef.current.getAudioTracks()[0]
+      const audioSender = peerConnectionRef.current
+        .getSenders()
+        .find((s) => s.track?.kind === 'audio')
+      if (audioSender && micTrack) {
+        await audioSender.replaceTrack(micTrack).catch(console.warn)
+      }
+    }
+
+    setIsScreenSharing(false)
+    setScreenHasAudio(false)
+
+    if (sendMessage && !isDemoMode) {
+      sendMessage('ROOM_SCREEN_SHARE_CHANGED', { isSharing: false, hasAudio: false }, sessionId)
+    }
+  }, [sessionId, sendMessage, isDemoMode])
+
+  // Alternar Compartilhamento de Tela / Janela com Áudio (Estilo Discord)
   async function toggleScreenSharing() {
     if (isScreenSharing) {
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach((track) => track.stop())
-        screenStreamRef.current = null
-      }
-      if (peerConnectionRef.current && localStreamRef.current) {
-        const videoTrack = localStreamRef.current.getVideoTracks()[0]
-        const sender = peerConnectionRef.current
-          .getSenders()
-          .find((s) => s.track?.kind === 'video')
-        if (sender && videoTrack) {
-          sender.replaceTrack(videoTrack)
-        }
-      }
-      setIsScreenSharing(false)
+      await stopScreenSharing()
     } else {
       try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        })
-        screenStreamRef.current = stream
+        // Solicita captura de tela permitindo escolha de Tela Inteira, Janela específica ou Guia
+        // com inclusão explícita de áudio do sistema/aplicativo (estilo Discord)
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            cursor: 'always',
+            displaySurface: 'monitor',
+          },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          systemAudio: 'include',
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include',
+        } as unknown as MediaStreamConstraints)
+
+        screenStreamRef.current = displayStream
         if (screenVideoRef.current) {
-          screenVideoRef.current.srcObject = stream
+          screenVideoRef.current.srcObject = displayStream
         }
 
-        const screenTrack = stream.getVideoTracks()[0]
-        if (peerConnectionRef.current && screenTrack) {
-          const sender = peerConnectionRef.current
+        const screenVideoTrack = displayStream.getVideoTracks()[0]
+        const screenAudioTracks = displayStream.getAudioTracks()
+        const hasAudio = screenAudioTracks.length > 0
+
+        // Substitui a track de vídeo na conexão WebRTC para transmitir a tela para o parceiro
+        if (peerConnectionRef.current && screenVideoTrack) {
+          const videoSender = peerConnectionRef.current
             .getSenders()
             .find((s) => s.track?.kind === 'video')
-          if (sender) {
-            sender.replaceTrack(screenTrack)
+          if (videoSender) {
+            await videoSender.replaceTrack(screenVideoTrack)
           }
         }
 
-        screenTrack.onended = () => {
-          setIsScreenSharing(false)
-          if (peerConnectionRef.current && localStreamRef.current) {
-            const videoTrack = localStreamRef.current.getVideoTracks()[0]
-            const sender = peerConnectionRef.current
-              .getSenders()
-              .find((s) => s.track?.kind === 'video')
-            if (sender && videoTrack) {
-              sender.replaceTrack(videoTrack)
+        // Mixagem de Áudio estilo Discord: Microfone + Áudio da Janela/Sistema
+        if (hasAudio) {
+          try {
+            const AudioContextClass =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+            if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+              audioContextRef.current = new AudioContextClass()
             }
+            const audioCtx = audioContextRef.current
+            if (audioCtx.state === 'suspended') {
+              await audioCtx.resume()
+            }
+
+            const mixedDestination = audioCtx.createMediaStreamDestination()
+            mixedAudioDestinationRef.current = mixedDestination
+
+            // Conecta microfone se disponível
+            if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
+              const micStream = new MediaStream([localStreamRef.current.getAudioTracks()[0]])
+              const micSource = audioCtx.createMediaStreamSource(micStream)
+              micSource.connect(mixedDestination)
+              micAudioSourceRef.current = micSource
+            }
+
+            // Conecta áudio da janela/tela compartilhada
+            const screenAudioStream = new MediaStream([screenAudioTracks[0]])
+            const screenSource = audioCtx.createMediaStreamSource(screenAudioStream)
+            screenSource.connect(mixedDestination)
+            screenAudioSourceRef.current = screenSource
+
+            // Transmite o fluxo de áudio combinado pelo WebRTC
+            const mixedTrack = mixedDestination.stream.getAudioTracks()[0]
+            if (peerConnectionRef.current && mixedTrack) {
+              const audioSender = peerConnectionRef.current
+                .getSenders()
+                .find((s) => s.track?.kind === 'audio')
+              if (audioSender) {
+                await audioSender.replaceTrack(mixedTrack)
+              }
+            }
+          } catch (audioMixErr) {
+            console.warn('Erro ao mixar áudio da tela com microfone:', audioMixErr)
           }
         }
+
+        // Trata o botão nativo flutuante do navegador "Interromper compartilhamento"
+        screenVideoTrack.onended = () => {
+          stopScreenSharing()
+        }
+
         setIsScreenSharing(true)
+        setScreenHasAudio(hasAudio)
+
+        if (sendMessage && !isDemoMode) {
+          sendMessage('ROOM_SCREEN_SHARE_CHANGED', { isSharing: true, hasAudio }, sessionId)
+        }
       } catch (err) {
-        console.warn('Compartilhamento de tela cancelado:', err)
+        console.warn('Compartilhamento de tela cancelado pelo usuário ou não suportado:', err)
       }
     }
   }
@@ -792,14 +926,25 @@ export function VirtualRoom({
                 focusMode === 'VIDEO' ? 'w-full h-full' : 'w-36 h-24 sm:w-44 sm:h-28'
               }`}
             >
-              <video
-                ref={localVideoRef}
-                autoPlay
-                muted
-                playsInline
-                className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''}`}
-              />
-              {!isVideoEnabled && (
+              {isScreenSharing ? (
+                <video
+                  ref={screenVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="w-full h-full object-contain bg-black"
+                />
+              ) : (
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''}`}
+                />
+              )}
+
+              {!isScreenSharing && !isVideoEnabled && (
                 <div className="flex flex-col items-center justify-center text-slate-500">
                   <div
                     className={`rounded-full bg-slate-800 flex items-center justify-center font-bold text-slate-400 ${
@@ -814,17 +959,31 @@ export function VirtualRoom({
 
               {/* Card do Usuário Local */}
               <div
-                className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 ${
+                className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 flex-wrap ${
                   focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
                 }`}
               >
-                <span className="font-bold text-slate-100">
-                  Você ({currentUser.name.split(' ')[0]})
+                <span className="font-bold text-slate-100 flex items-center gap-1">
+                  {isScreenSharing ? (
+                    <>
+                      <span>🖥️</span>
+                      <span>Sua Tela/Janela</span>
+                    </>
+                  ) : (
+                    `Você (${currentUser.name.split(' ')[0]})`
+                  )}
                 </span>
-                {!isAudioEnabled && <MicOff className="w-3 h-3 text-rose-400" />}
+
+                {isScreenSharing && screenHasAudio && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 text-[10px] font-bold flex items-center gap-1">
+                    🔊 Áudio Ativo
+                  </span>
+                )}
+
+                {!isScreenSharing && !isAudioEnabled && <MicOff className="w-3 h-3 text-rose-400" />}
 
                 {/* VU Meter */}
-                {isAudioEnabled && (
+                {!isScreenSharing && isAudioEnabled && (
                   <div className="flex items-center gap-0.5 ml-1">
                     <span
                       className="w-1 bg-emerald-400 rounded-full transition-all"
@@ -849,23 +1008,17 @@ export function VirtualRoom({
                 focusMode === 'VIDEO' ? 'w-full h-full' : 'w-36 h-24 sm:w-44 sm:h-28'
               }`}
             >
-              {isScreenSharing ? (
-                <video
-                  ref={screenVideoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-contain bg-black"
-                />
-              ) : (
-                <video
-                  ref={remoteVideoRef}
-                  autoPlay
-                  playsInline
-                  className={`w-full h-full object-cover ${!hasRemoteStream && !isDemoMode ? 'hidden' : ''}`}
-                />
-              )}
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                muted={isSpeakerMuted}
+                className={`w-full h-full ${
+                  isRemoteScreenSharing ? 'object-contain bg-black' : 'object-cover'
+                } ${!hasRemoteStream && !isDemoMode ? 'hidden' : ''}`}
+              />
 
-              {!hasRemoteStream && !isDemoMode && !isScreenSharing && (
+              {!hasRemoteStream && !isDemoMode && (
                 <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400">
                   <div
                     className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
@@ -883,7 +1036,7 @@ export function VirtualRoom({
                 </div>
               )}
 
-              {isDemoMode && !isScreenSharing && (
+              {isDemoMode && !hasRemoteStream && (
                 <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400">
                   <div
                     className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
@@ -902,19 +1055,30 @@ export function VirtualRoom({
               )}
 
               <div
-                className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 ${
+                className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 flex-wrap ${
                   focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
                 }`}
               >
-                <span className="font-bold text-slate-100">
-                  {isScreenSharing
-                    ? '🖥️ Compartilhamento de Tela'
-                    : isDemoMode
-                    ? 'Lucas Mendes (Monitor)'
-                    : isStudent
-                    ? 'Monitor'
-                    : 'Aluno'}
+                <span className="font-bold text-slate-100 flex items-center gap-1">
+                  {isRemoteScreenSharing ? (
+                    <>
+                      <span>🖥️</span>
+                      <span>Tela de {isStudent ? 'Monitor' : 'Aluno'}</span>
+                    </>
+                  ) : isDemoMode ? (
+                    'Lucas Mendes (Monitor)'
+                  ) : isStudent ? (
+                    'Monitor'
+                  ) : (
+                    'Aluno'
+                  )}
                 </span>
+
+                {isRemoteScreenSharing && remoteHasScreenAudio && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 text-[10px] font-bold flex items-center gap-1">
+                    🔊 Áudio da Tela Ativo
+                  </span>
+                )}
               </div>
             </div>
 
@@ -1145,17 +1309,31 @@ export function VirtualRoom({
           {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
         </button>
 
-        {/* Toggle Screen Share */}
+        {/* Toggle Screen Share (Estilo Discord com Áudio e Seleção de Janela/Tela) */}
         <button
           onClick={toggleScreenSharing}
-          className={`p-3.5 rounded-2xl transition-all ${
+          className={`p-3.5 rounded-2xl transition-all flex items-center gap-2 ${
             isScreenSharing
-              ? 'bg-brand-yellow text-slate-950 font-black shadow-lg shadow-brand-yellow/30'
+              ? 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black shadow-lg shadow-emerald-500/40 ring-2 ring-emerald-300'
               : 'bg-slate-800 hover:bg-slate-700 text-white'
           }`}
-          title={isScreenSharing ? 'Parar Compartilhamento' : 'Compartilhar Tela'}
+          title={
+            isScreenSharing
+              ? 'Interromper Compartilhamento de Tela/Janela'
+              : 'Compartilhar Tela ou Janela com Áudio (Estilo Discord)'
+          }
         >
-          {isScreenSharing ? <MonitorX className="w-5 h-5" /> : <MonitorUp className="w-5 h-5" />}
+          {isScreenSharing ? (
+            <>
+              <MonitorX className="w-5 h-5" />
+              <span className="text-xs hidden sm:inline font-bold">Transmitindo Tela</span>
+            </>
+          ) : (
+            <>
+              <MonitorUp className="w-5 h-5" />
+              <span className="text-xs hidden lg:inline font-semibold">Compartilhar Tela</span>
+            </>
+          )}
         </button>
 
         {/* Toggle Speaker */}
