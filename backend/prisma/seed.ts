@@ -56,8 +56,9 @@ const initialSubjects = [
 async function main() {
   console.log('🌱 Populando catálogo de matérias universitárias...')
 
+  const createdSubjects = []
   for (const subject of initialSubjects) {
-    await prisma.subject.upsert({
+    const s = await prisma.subject.upsert({
       where: { code: subject.code },
       update: {
         name: subject.name,
@@ -66,9 +67,101 @@ async function main() {
       },
       create: subject,
     })
+    createdSubjects.push(s)
   }
 
   console.log('✅ Catálogo populado com sucesso!')
+
+  console.log('👤 Populando usuários de demonstração...')
+
+  // Senha padrão "123456" para contas de teste
+  const passwordHash = '$2a$08$uh9fRKO1mN3fs/pygxpPZO7fyhSb/SmO7TEl.M36O1YVyr.KkgcDO'
+
+  // 1. Aluno de Demonstração
+  const demoStudent = await prisma.user.upsert({
+    where: { email: 'aluno@aluno.ufabc.edu.br' },
+    update: {},
+    create: {
+      name: 'Aluno Demonstração',
+      username: 'aluno',
+      email: 'aluno@aluno.ufabc.edu.br',
+      cpf: '11144477735',
+      passwordHash,
+      role: 'STUDENT',
+    },
+  })
+
+  // 2. Monitor de Demonstração
+  const demoTutor = await prisma.user.upsert({
+    where: { email: 'monitor@aluno.ufabc.edu.br' },
+    update: {},
+    create: {
+      name: 'Lucas Mendes (Monitor)',
+      username: 'monitor',
+      email: 'monitor@aluno.ufabc.edu.br',
+      cpf: '22255588846',
+      passwordHash,
+      role: 'TUTOR',
+      rating: 4.9,
+      totalReviews: 8,
+    },
+  })
+
+  // 3. Usuário Gabryel (Monitor)
+  const gabryelUser = await prisma.user.upsert({
+    where: { email: 'gabryel.m@aluno.ufabc.edu.br' },
+    update: {},
+    create: {
+      name: 'Gabryel Gomes Martins',
+      username: 'thefirst',
+      email: 'gabryel.m@aluno.ufabc.edu.br',
+      cpf: '49063244878',
+      passwordHash,
+      role: 'TUTOR',
+      rating: 5.0,
+      totalReviews: 3,
+    },
+  })
+
+  // 4. Usuário Rafa (Aluno)
+  await prisma.user.upsert({
+    where: { email: 'rafa@aluno.ufabc.edu.br' },
+    update: {},
+    create: {
+      name: 'Rafaela Santos',
+      username: 'rafa',
+      email: 'rafa@aluno.ufabc.edu.br',
+      cpf: '49063199805',
+      passwordHash,
+      role: 'STUDENT',
+    },
+  })
+
+  // Vincula matérias aprovadas para os monitores
+  const tutorIds = [demoTutor.id, gabryelUser.id]
+  for (const tutorId of tutorIds) {
+    for (const subject of createdSubjects.slice(0, 4)) {
+      await prisma.academicRecord.upsert({
+        where: {
+          userId_subjectId: {
+            userId: tutorId,
+            subjectId: subject.id,
+          },
+        },
+        update: {},
+        create: {
+          userId: tutorId,
+          subjectId: subject.id,
+          concept: 'A',
+          grade: 9.5,
+          isApproved: true,
+          validatedAt: new Date(),
+        },
+      })
+    }
+  }
+
+  console.log('✅ Usuários e registros de monitoria populados!')
 }
 
 main()

@@ -17,6 +17,11 @@ lerna-debug.log*
 # Builds e Distribuição
 dist/
 build/
+dist-portable/
+bin/
+data/
+*.log
+*.zip
 .next/
 out/
 coverage/
