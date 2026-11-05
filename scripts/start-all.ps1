@@ -4,6 +4,90 @@
 $ErrorActionPreference = "Continue"
 $RootDir = Split-Path -Parent $PSScriptRoot
 
+# Inicializa Windows Job Object para garantir que NENHUM processo fique orfao
+# Se a janela for fechada pelo 'X' ou o usuario encerrar, o Windows Kernel
+# mata automaticamente todos os processos filhos (Node e PostgreSQL portatil).
+try {
+    $JobCode = @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public class HintlinkJobManager {
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetInformationJobObject(IntPtr hJob, int JobObjectInfoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    public const int JobObjectExtendedLimitInformation = 9;
+    public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+        public Int64 PerProcessUserTimeLimit;
+        public Int64 PerJobUserTimeLimit;
+        public UInt32 LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public UInt32 ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public UInt32 PriorityClass;
+        public UInt32 SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS {
+        public UInt64 ReadOperationCount;
+        public UInt64 WriteOperationCount;
+        public UInt64 OtherOperationCount;
+        public UInt64 ReadTransferCount;
+        public UInt64 WriteTransferCount;
+        public UInt64 OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryLimit;
+        public UIntPtr PeakJobMemoryLimit;
+    }
+
+    private static IntPtr _jobHandle = IntPtr.Zero;
+
+    public static void Initialize() {
+        if (_jobHandle != IntPtr.Zero) return;
+        _jobHandle = CreateJobObject(IntPtr.Zero, null);
+        var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr extendedInfoPtr = Marshal.AllocHGlobal(length);
+        Marshal.StructureToPtr(info, extendedInfoPtr, false);
+        SetInformationJobObject(_jobHandle, JobObjectExtendedLimitInformation, extendedInfoPtr, (uint)length);
+        Marshal.FreeHGlobal(extendedInfoPtr);
+    }
+
+    public static bool AddProcess(int processId) {
+        if (_jobHandle == IntPtr.Zero) Initialize();
+        try {
+            var proc = Process.GetProcessById(processId);
+            return AssignProcessToJobObject(_jobHandle, proc.Handle);
+        } catch {
+            return false;
+        }
+    }
+}
+"@
+    Add-Type -TypeDefinition $JobCode -Language CSharp
+    [HintlinkJobManager]::Initialize()
+} catch {}
+
 function Test-PortOpen([string]$ip, [int]$port) {
     try {
         $tcp = New-Object System.Net.Sockets.TcpClient
@@ -102,6 +186,16 @@ $PidFile = Join-Path $RootDir ".hintlink.pids"
     "FRONTEND_PID=$($FrontendProc.Id)"
     "LOCAL_PG=$StartedLocalPg"
 ) | Out-File -FilePath $PidFile -Encoding utf8
+
+# Registrar no Windows Job Object para que se o usuario fechar a janela no 'X',
+# o kernel do Windows elimine automaticamente o Node e o PostgreSQL local
+try {
+    [HintlinkJobManager]::AddProcess($BackendProc.Id) | Out-Null
+    [HintlinkJobManager]::AddProcess($FrontendProc.Id) | Out-Null
+    Get-Process postgres -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -and $_.Path.StartsWith($RootDir, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }
+    } | ForEach-Object { [HintlinkJobManager]::AddProcess($_.Id) | Out-Null }
+} catch {}
 
 # 6. Aguardar servidores responderem
 Write-Host "Aguardando servicos ficarem prontos..." -ForegroundColor Cyan

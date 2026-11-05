@@ -50,6 +50,13 @@ if (Test-Path $PgCtl) {
     & $PgCtl -D $DataDir stop -m fast 2>$null | Out-Null
 }
 
+# 4. Garantir que nenhum processo postgres.exe local do Hintlink ficou orfao
+Get-Process postgres -ErrorAction SilentlyContinue | Where-Object {
+    try {
+        $_.Path -and $_.Path.StartsWith($RootDir, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch { $false }
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+
 Write-Host ""
 Write-Host "====================================================================" -ForegroundColor Green
 Write-Host "   [OK] Todos os servicos do Hintlink foram encerrados com sucesso! " -ForegroundColor Yellow
