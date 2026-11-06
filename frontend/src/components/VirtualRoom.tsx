@@ -123,6 +123,13 @@ export function VirtualRoom({
   const screenVideoRef = useRef<HTMLVideoElement | null>(null)
   const whiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
+  const remoteStreamRef = useRef<MediaStream | null>(null)
+  const localStreamPromiseRef = useRef<{
+    promise: Promise<MediaStream>
+    resolve: (stream: MediaStream) => void
+    reject: (err: unknown) => void
+  } | null>(null)
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([])
   const screenStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const screenAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
@@ -131,6 +138,17 @@ export function VirtualRoom({
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
   const isDrawingRef = useRef(false)
   const lastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+
+  // Inicializa o promise da mídia local uma única vez
+  if (!localStreamPromiseRef.current) {
+    let resolveStream!: (stream: MediaStream) => void
+    let rejectStream!: (err: unknown) => void
+    const promise = new Promise<MediaStream>((res, rej) => {
+      resolveStream = res
+      rejectStream = rej
+    })
+    localStreamPromiseRef.current = { promise, resolve: resolveStream, reject: rejectStream }
+  }
 
   const isStudent = currentUser.role === 'STUDENT'
 
@@ -156,9 +174,38 @@ export function VirtualRoom({
     }
   }, [])
 
+  // Helper para obter ou aguardar a mídia local antes da negociação WebRTC
+  const getOrWaitLocalStream = useCallback(async (): Promise<MediaStream | null> => {
+    if (localStreamRef.current) return localStreamRef.current
+    if (localStreamPromiseRef.current) {
+      try {
+        return await Promise.race([
+          localStreamPromiseRef.current.promise,
+          new Promise<null>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+        ])
+      } catch {
+        return localStreamRef.current
+      }
+    }
+    return null
+  }, [])
+
   // Initialize WebRTC Peer Connection
-  const createPeerConnection = useCallback(() => {
-    if (peerConnectionRef.current) return peerConnectionRef.current
+  const createPeerConnection = useCallback((streamToAttach?: MediaStream | null) => {
+    const stream = streamToAttach || localStreamRef.current
+
+    if (peerConnectionRef.current) {
+      const pc = peerConnectionRef.current
+      if (stream) {
+        const senders = pc.getSenders()
+        stream.getTracks().forEach((track) => {
+          if (!senders.some((s) => s.track === track)) {
+            pc.addTrack(track, stream)
+          }
+        })
+      }
+      return pc
+    }
 
     const pc = new RTCPeerConnection({
       iceServers: [
@@ -167,17 +214,29 @@ export function VirtualRoom({
       ],
     })
 
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current!)
+    if (stream) {
+      stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream)
       })
     }
 
     pc.ontrack = (event) => {
-      if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0]
-        setHasRemoteStream(true)
+      let incomingStream = event.streams[0]
+      if (!incomingStream) {
+        if (!remoteStreamRef.current) {
+          remoteStreamRef.current = new MediaStream()
+        }
+        remoteStreamRef.current.addTrack(event.track)
+        incomingStream = remoteStreamRef.current
+      } else {
+        remoteStreamRef.current = incomingStream
       }
+
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = incomingStream
+        remoteVideoRef.current.play().catch(() => {})
+      }
+      setHasRemoteStream(true)
     }
 
     pc.onicecandidate = (event) => {
@@ -193,7 +252,8 @@ export function VirtualRoom({
   // Iniciar Negociação WebRTC
   const initiateOffer = useCallback(async () => {
     if (isDemoMode) return
-    const pc = createPeerConnection()
+    const stream = await getOrWaitLocalStream()
+    const pc = createPeerConnection(stream)
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
@@ -201,7 +261,7 @@ export function VirtualRoom({
     } catch (err) {
       console.warn('Erro ao criar WebRTC offer:', err)
     }
-  }, [createPeerConnection, isDemoMode, sendMessage, sessionId])
+  }, [createPeerConnection, getOrWaitLocalStream, isDemoMode, sendMessage, sessionId])
 
   // WebSocket Subscription for Real-time Sync (Draw, Chat, WebRTC, Call End)
   useEffect(() => {
@@ -212,16 +272,29 @@ export function VirtualRoom({
     const unsubscribe = subscribe(async (msg) => {
       if (msg.sessionId && msg.sessionId !== sessionId) return
 
-      if (msg.type === 'USER_JOINED_ROOM') {
-        if (currentUser.role === 'TUTOR') {
-          initiateOffer()
-        }
+      // Se outro usuário entrou OU se o Tutor entrou e o Aluno já estava na sala
+      if (
+        (msg.type === 'USER_JOINED_ROOM' && currentUser.role === 'TUTOR') ||
+        (msg.type === 'ROOM_USERS' && currentUser.role === 'TUTOR')
+      ) {
+        initiateOffer()
       }
 
       if (msg.type === 'RTC_OFFER' && msg.payload) {
-        const pc = createPeerConnection()
+        // Aguarda a câmera/microfone do Aluno estarem prontos antes de responder à oferta
+        const stream = await getOrWaitLocalStream()
+        const pc = createPeerConnection(stream)
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(msg.payload as RTCSessionDescriptionInit))
+
+          // Esvazia candidatos ICE recebidos antes do remoteDescription
+          while (pendingIceCandidatesRef.current.length > 0) {
+            const cand = pendingIceCandidatesRef.current.shift()
+            if (cand) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(console.warn)
+            }
+          }
+
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
           sendMessage('RTC_ANSWER', answer, sessionId)
@@ -235,6 +308,12 @@ export function VirtualRoom({
         if (pc) {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.payload as RTCSessionDescriptionInit))
+            while (pendingIceCandidatesRef.current.length > 0) {
+              const cand = pendingIceCandidatesRef.current.shift()
+              if (cand) {
+                await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(console.warn)
+              }
+            }
           } catch (err) {
             console.warn('Erro ao processar WebRTC answer:', err)
           }
@@ -243,12 +322,15 @@ export function VirtualRoom({
 
       if (msg.type === 'RTC_ICE_CANDIDATE' && msg.payload) {
         const pc = peerConnectionRef.current
-        if (pc) {
+        const cand = msg.payload as RTCIceCandidateInit
+        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
           try {
-            await pc.addIceCandidate(new RTCIceCandidate(msg.payload as RTCIceCandidateInit))
+            await pc.addIceCandidate(new RTCIceCandidate(cand))
           } catch (err) {
             console.warn('Erro ao adicionar ICE candidate:', err)
           }
+        } else {
+          pendingIceCandidatesRef.current.push(cand)
         }
       }
 
@@ -312,7 +394,7 @@ export function VirtualRoom({
       sendMessage('LEAVE_ROOM', {}, sessionId)
       unsubscribe()
     }
-  }, [isDemoMode, subscribe, sendMessage, sessionId, currentUser.role, createPeerConnection, initiateOffer, onClose])
+  }, [isDemoMode, subscribe, sendMessage, sessionId, currentUser.role, createPeerConnection, initiateOffer, onClose, getOrWaitLocalStream])
 
   // Initialize Canvas Fixed Dimensions once
   useEffect(() => {
@@ -334,15 +416,25 @@ export function VirtualRoom({
           audio: true,
         })
         localStreamRef.current = stream
+        localStreamPromiseRef.current?.resolve(stream)
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream
         }
 
         if (peerConnectionRef.current) {
+          const pc = peerConnectionRef.current
+          const senders = pc.getSenders()
+          let addedAny = false
           stream.getTracks().forEach((track) => {
-            peerConnectionRef.current?.addTrack(track, stream)
+            if (!senders.some((s) => s.track === track)) {
+              pc.addTrack(track, stream)
+              addedAny = true
+            }
           })
+          if (addedAny && pc.signalingState === 'stable') {
+            initiateOffer()
+          }
         }
 
         // Setup Audio Analyser for VU meter
@@ -396,6 +488,7 @@ export function VirtualRoom({
         }
       } catch (err) {
         console.warn('Permissão de câmera/microfone não concedida:', err)
+        localStreamPromiseRef.current?.reject(err)
       }
     }
 
@@ -442,7 +535,16 @@ export function VirtualRoom({
         audioContextRef.current.close().catch(() => {})
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Garante a vinculação e reprodução do fluxo remoto assim que montado ou atualizado
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStreamRef.current) {
+      remoteVideoRef.current.srcObject = remoteStreamRef.current
+      remoteVideoRef.current.play().catch(() => {})
+    }
+  }, [hasRemoteStream])
 
   // Toggle Camera
   function toggleVideo() {
@@ -1013,6 +1115,9 @@ export function VirtualRoom({
                 autoPlay
                 playsInline
                 muted={isSpeakerMuted}
+                onLoadedMetadata={(e) => {
+                  ;(e.target as HTMLVideoElement).play().catch(() => {})
+                }}
                 className={`w-full h-full ${
                   isRemoteScreenSharing ? 'object-contain bg-black' : 'object-cover'
                 } ${!hasRemoteStream && !isDemoMode ? 'hidden' : ''}`}

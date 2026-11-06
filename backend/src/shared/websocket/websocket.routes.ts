@@ -50,6 +50,24 @@ export async function websocketRoutes(app: FastifyInstance) {
 
           if (type === 'JOIN_ROOM' && sessionId) {
             connectionManager.joinRoom(sessionId, userId, role, socket)
+
+            // Notifica quem acabou de entrar sobre quem já está na sala
+            const existingParticipants = connectionManager
+              .getRoomParticipants(sessionId)
+              .filter((p) => p.socket !== socket)
+              .map((p) => ({ userId: p.userId, role: p.role }))
+
+            if (existingParticipants.length > 0) {
+              socket.send(
+                JSON.stringify({
+                  type: 'ROOM_USERS',
+                  sessionId,
+                  payload: { participants: existingParticipants },
+                  timestamp: new Date().toISOString(),
+                })
+              )
+            }
+
             // Informa os outros participantes que este usuário entrou
             connectionManager.sendToRoom(
               sessionId,
