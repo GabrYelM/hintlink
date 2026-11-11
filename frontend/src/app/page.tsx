@@ -286,7 +286,7 @@ export default function Home() {
                         required
                         value={loginIdentifier}
                         onChange={(e) => setLoginIdentifier(e.target.value)}
-                        placeholder="seu.email@ufabc.edu.br ou seu_usuario"
+                        placeholder="seu@email.com ou seu_usuario"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-brand-light border border-slate-200 text-sm text-brand-dark placeholder:text-slate-400 focus:outline-none focus:border-brand-blue"
                       />
                     </div>
@@ -311,6 +311,39 @@ export default function Home() {
                       {loading ? 'Entrando...' : 'Acessar Plataforma'}
                       <ArrowRight className="w-4 h-4" />
                     </button>
+
+                    {/* Atalhos para Contas de Demonstração (1 Clique) */}
+                    <div className="mt-4 pt-3 border-t border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                        Preenchimento Rápido de Teste (1 Clique):
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoginIdentifier('aluno@aluno.ufabc.edu.br')
+                            setPassword('123456')
+                            setError(null)
+                          }}
+                          className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-all"
+                        >
+                          <span className="block text-xs font-bold text-brand-dark">🎓 Aluno Teste</span>
+                          <span className="block text-[10px] text-slate-500 font-mono truncate">aluno@...ufabc.br</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoginIdentifier('monitor@aluno.ufabc.edu.br')
+                            setPassword('123456')
+                            setError(null)
+                          }}
+                          className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-all"
+                        >
+                          <span className="block text-xs font-bold text-brand-dark">👨‍🏫 Monitor Lucas</span>
+                          <span className="block text-[10px] text-slate-500 font-mono truncate">monitor@...ufabc.br</span>
+                        </button>
+                      </div>
+                    </div>
                   </form>
                 ) : (
                   <form onSubmit={handleRegister} className="space-y-3.5">
@@ -365,13 +398,13 @@ export default function Home() {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">E-mail Universitário</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">E-mail (qualquer provedor)</label>
                       <input
                         type="email"
                         required
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="aluno@ufabc.edu.br"
+                        placeholder="seu@email.com"
                         className="w-full px-3 py-2 rounded-xl bg-brand-light border border-slate-200 text-sm text-brand-dark placeholder:text-slate-400 focus:outline-none focus:border-brand-blue"
                       />
                     </div>

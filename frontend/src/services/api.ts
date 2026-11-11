@@ -12,15 +12,21 @@ export const api = axios.create({
   baseURL: getInitialBaseURL(),
 })
 
-// Interceptor para garantir que requisições feitas no navegador usem o hostname atual (IP da rede local)
+// Interceptor para garantir que requisições usem o hostname atual e anexe o token JWT mais recente
 api.interceptors.request.use((config) => {
-  if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_API_URL) {
-    config.baseURL = `http://${window.location.hostname}:3333/api/v1`
+  if (typeof window !== 'undefined') {
+    if (!process.env.NEXT_PUBLIC_API_URL) {
+      config.baseURL = `http://${window.location.hostname}:3333/api/v1`
+    }
+    const token = localStorage.getItem('@hintlink:token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
   }
   return config
 })
 
-// Anexa o token JWT automaticamente se estiver salvo no navegador
+// Anexa o token JWT automaticamente se já estiver salvo no navegador
 if (typeof window !== 'undefined') {
   const token = localStorage.getItem('@hintlink:token')
   if (token) {

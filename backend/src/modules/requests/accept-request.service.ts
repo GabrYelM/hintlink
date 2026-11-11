@@ -1,6 +1,7 @@
 import { prisma } from '../../shared/database/prisma.js'
 import { RequestsRepository } from './requests.repository.js'
 import { AcademicRecordsRepository } from '../academic-records/academic-records.repository.js'
+import { UsersRepository } from '../users/users.repository.js'
 import { AppError } from '../../shared/errors/app-error.js'
 
 interface AcceptRequestInput {
@@ -11,7 +12,8 @@ interface AcceptRequestInput {
 export class AcceptRequestService {
   constructor(
     private requestsRepository: RequestsRepository,
-    private academicRecordsRepository: AcademicRecordsRepository
+    private academicRecordsRepository: AcademicRecordsRepository,
+    private usersRepository: UsersRepository = new UsersRepository()
   ) {}
 
   async execute({ requestId, tutorId }: AcceptRequestInput) {
@@ -29,6 +31,11 @@ export class AcceptRequestService {
       throw new AppError('Você não pode aceitar sua própria solicitação.', 400)
     }
 
+    // Regra: Não pode aceitar se já foi recusado pelo aluno para este chamado
+    if (request.rejectedTutorIds && request.rejectedTutorIds.includes(tutorId)) {
+      throw new AppError('Você foi recusado pelo aluno para este chamado e não pode aceitá-lo novamente.', 403)
+    }
+
     // Regra de segurança acadêmica: O monitor precisa ter a matéria aprovada
     const hasApprovedRecord = await this.academicRecordsRepository.findByUserAndSubject(
       tutorId,
@@ -40,6 +47,26 @@ export class AcceptRequestService {
         'Você não possui esta matéria aprovada em seu histórico acadêmico para monitorar.',
         403
       )
+    }
+
+    // Busca detalhes do monitor e número de sessões finalizadas
+    const tutorUser = await this.usersRepository.findById(tutorId).catch(() => null)
+    let completedSessionsCount = 0
+    try {
+      completedSessionsCount = await this.usersRepository.countFinishedSessions(tutorId)
+    } catch {
+      completedSessionsCount = 0
+    }
+
+    const tutorSummary = {
+      id: tutorUser?.id || tutorId,
+      name: tutorUser?.name || 'Monitor',
+      email: tutorUser?.email || '',
+      avatarUrl: tutorUser?.avatarUrl || null,
+      rating: tutorUser?.rating ?? 5.0,
+      totalReviews: tutorUser?.totalReviews ?? 0,
+      completedSessionsCount,
+      isNovel: completedSessionsCount < 5,
     }
 
     // Transação ACID: Atualiza o chamado para MATCHED, cria a Sessão e abre a Custódia (Escrow)
@@ -75,6 +102,7 @@ export class AcceptRequestService {
         session,
         escrow,
         request: updatedRequest,
+        tutor: tutorSummary,
       }
     })
 

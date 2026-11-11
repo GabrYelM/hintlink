@@ -110,6 +110,8 @@ model TutoringRequest {
   durationMinutes Int           @default(30)
   offeredPrice    Decimal       @db.Decimal(10, 2)
   status          RequestStatus @default(OPEN)
+  matchQueue      String?       @default("NORMAL") // "NORMAL" ou "NOVEL"
+  rejectedTutorIds String[]     @default([])
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 

@@ -2,6 +2,8 @@ import { RequestsRepository } from './requests.repository.js'
 import { SubjectsRepository } from '../subjects/subjects.repository.js'
 import { UsersRepository } from '../users/users.repository.js'
 import { AppError } from '../../shared/errors/app-error.js'
+import { calculatePriceByDuration } from '../../shared/utils/pricing.js'
+import { determineTargetQueue } from './matchmaking.service.js'
 
 interface CreateTutoringRequestInput {
   studentId: string
@@ -9,7 +11,7 @@ interface CreateTutoringRequestInput {
   topic: string
   description?: string
   durationMinutes: number
-  offeredPrice: number
+  offeredPrice?: number // Opcional: o sistema calcula com base na duração
 }
 
 export class CreateTutoringRequestService {
@@ -25,7 +27,6 @@ export class CreateTutoringRequestService {
     topic,
     description,
     durationMinutes,
-    offeredPrice,
   }: CreateTutoringRequestInput) {
     const student = await this.usersRepository.findById(studentId)
     if (!student) {
@@ -37,13 +38,15 @@ export class CreateTutoringRequestService {
       throw new AppError('Matéria não encontrada.', 404)
     }
 
-    if (offeredPrice <= 0) {
-      throw new AppError('O valor ofertado deve ser maior que zero.', 400)
-    }
-
-    if (durationMinutes < 15) {
+    if (!durationMinutes || durationMinutes < 15) {
       throw new AppError('A duração mínima de monitoria é de 15 minutos.', 400)
     }
+
+    // Regra de Negócio: O aluno não define o preço. O sistema calcula a cobrança baseada no tempo.
+    const calculatedPrice = calculatePriceByDuration(durationMinutes)
+
+    // Regra de Matchmaking 50/50: Metade das monitorias vai para a fila normal e metade para a fila de novos monitores (<5 aulas)
+    const matchQueue = determineTargetQueue()
 
     const tutoringRequest = await this.requestsRepository.create({
       studentId,
@@ -51,8 +54,10 @@ export class CreateTutoringRequestService {
       topic,
       description,
       durationMinutes,
-      offeredPrice,
+      offeredPrice: calculatedPrice,
       status: 'OPEN',
+      matchQueue,
+      rejectedTutorIds: [],
     })
 
     return {

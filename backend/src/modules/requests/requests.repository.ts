@@ -66,4 +66,16 @@ export class RequestsRepository {
       data: { status },
     })
   }
+
+  async addRejectedTutor(id: string, tutorId: string) {
+    const request = await prisma.tutoringRequest.findUnique({ where: { id } })
+    const existingRejected = request?.rejectedTutorIds || []
+    return prisma.tutoringRequest.update({
+      where: { id },
+      data: {
+        status: 'OPEN',
+        rejectedTutorIds: Array.from(new Set([...existingRejected, tutorId])),
+      },
+    })
+  }
 }

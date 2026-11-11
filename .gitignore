@@ -49,3 +49,4 @@ backend/uploads/
 .DS_Store
 Thumbs.db
 desktop.ini
+.hintlink.pids
