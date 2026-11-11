@@ -78,6 +78,25 @@ export function VirtualRoom({
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false)
   const [audioVolumeLevel, setAudioVolumeLevel] = useState(0) // 0 to 100 for VU meter
   const [hasRemoteStream, setHasRemoteStream] = useState(false)
+  const [isP2PConnected, setIsP2PConnected] = useState(false)
+  const [isPartnerInRoom, setIsPartnerInRoom] = useState(false)
+  const [remoteIsVideoEnabled, setRemoteIsVideoEnabled] = useState(false)
+  const [remoteIsAudioEnabled, setRemoteIsAudioEnabled] = useState(true)
+  const [isInsecureContextAlert, setIsInsecureContextAlert] = useState(false)
+  const [needsUserInteractionForAudio, setNeedsUserInteractionForAudio] = useState(false)
+
+  // Verifica se o navegador bloqueou acesso à mídia por ser HTTP em rede local
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const isLocalhost =
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1' ||
+        window.location.hostname === '[::1]'
+      if (!window.isSecureContext && !isLocalhost) {
+        setIsInsecureContextAlert(true)
+      }
+    }
+  }, [])
 
   // Focus Mode: Ambos ficam visíveis, apenas alternando o foco principal
   const [focusMode, setFocusMode] = useState<'VIDEO' | 'WHITEBOARD'>('VIDEO')
@@ -88,12 +107,6 @@ export function VirtualRoom({
   const [lineWidth, setLineWidth] = useState(3)
   const [isEraser, setIsEraser] = useState(false)
   const strokeHistoryRef = useRef<StrokeData[]>([])
-
-  // MediaRecorder / Pre-recording State
-  const [isRecording, setIsRecording] = useState(false)
-  const [recordingDurationSeconds, setRecordingDurationSeconds] = useState(0)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const recordedChunksRef = useRef<Blob[]>([])
 
   // Finish / Dispute Modal State (Exclusivo do Aluno)
   const [isEndModalOpen, setIsEndModalOpen] = useState(false)
@@ -111,7 +124,7 @@ export function VirtualRoom({
       id: '1',
       senderName: 'Sistema Hintlink',
       senderRole: 'BOT',
-      text: 'Sala iniciada. Gravação de conformidade ativa. Se a dúvida for sanada, a gravação será descartada ao final.',
+      text: 'Sala iniciada. Conexão WebRTC ponto a ponto ativa.',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ])
@@ -120,10 +133,13 @@ export function VirtualRoom({
   // Refs
   const localVideoRef = useRef<HTMLVideoElement | null>(null)
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null)
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null)
+  const remoteScreenVideoRef = useRef<HTMLVideoElement | null>(null)
   const screenVideoRef = useRef<HTMLVideoElement | null>(null)
   const whiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
   const remoteStreamRef = useRef<MediaStream | null>(null)
+  const remoteScreenStreamRef = useRef<MediaStream | null>(null)
   const localStreamPromiseRef = useRef<{
     promise: Promise<MediaStream>
     resolve: (stream: MediaStream) => void
@@ -136,6 +152,10 @@ export function VirtualRoom({
   const mixedAudioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null)
   const micAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
+  const hasRealAudioRef = useRef<boolean>(false)
+  const hasRealVideoRef = useRef<boolean>(false)
+  const isNegotiatingRef = useRef<boolean>(false)
+  const offerTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isDrawingRef = useRef(false)
   const lastPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
 
@@ -190,104 +210,400 @@ export function VirtualRoom({
     return null
   }, [])
 
-  // Initialize WebRTC Peer Connection
-  const createPeerConnection = useCallback((streamToAttach?: MediaStream | null) => {
-    const stream = streamToAttach || localStreamRef.current
+  const isVideoEnabledRef = useRef(isVideoEnabled)
+  isVideoEnabledRef.current = isVideoEnabled
+  const isAudioEnabledRef = useRef(isAudioEnabled)
+  isAudioEnabledRef.current = isAudioEnabled
+  const isScreenSharingRef = useRef(isScreenSharing)
+  isScreenSharingRef.current = isScreenSharing
+  const screenHasAudioRef = useRef(screenHasAudio)
+  screenHasAudioRef.current = screenHasAudio
 
-    if (peerConnectionRef.current) {
-      const pc = peerConnectionRef.current
-      if (stream) {
-        const senders = pc.getSenders()
-        stream.getTracks().forEach((track) => {
-          if (!senders.some((s) => s.track === track)) {
-            pc.addTrack(track, stream)
+  // Sincroniza as faixas locais (Microfone, Câmera e Tela Compartilhada) nos 3 transceivers determinísticos (mid 0, 1, 2)
+  const syncLocalTracksToPc = useCallback(async (pc: RTCPeerConnection, streamToAttach?: MediaStream | null) => {
+    const stream = streamToAttach || localStreamRef.current
+    const screenStream = screenStreamRef.current
+    const transceivers = pc.getTransceivers()
+
+    const audioTransceiver =
+      transceivers.find((t) => t.mid === '0') ||
+      transceivers.find((t) => t.receiver.track?.kind === 'audio' || t.sender.track?.kind === 'audio')
+    const videoTransceivers = transceivers.filter(
+      (t) => t.receiver.track?.kind === 'video' || t.sender.track?.kind === 'video'
+    )
+    const cameraTransceiver = transceivers.find((t) => t.mid === '1') || videoTransceivers[0]
+    const screenTransceiver = transceivers.find((t) => t.mid === '2') || videoTransceivers[1]
+
+    // 1. Canal de Áudio (mid: 0) - Usa áudio mixado se compartilhando tela com áudio, senão microfone local
+    if (audioTransceiver) {
+      audioTransceiver.direction = 'sendrecv'
+      const mixedTrack = mixedAudioDestinationRef.current?.stream.getAudioTracks()[0]
+      const micTrack = stream?.getAudioTracks()[0] || null
+      const targetAudioTrack = mixedTrack || micTrack
+      if (audioTransceiver.sender && audioTransceiver.sender.track !== targetAudioTrack) {
+        try {
+          await audioTransceiver.sender.replaceTrack(targetAudioTrack)
+        } catch (err) {
+          console.warn('[WebRTC] Erro ao sincronizar faixa de áudio:', err)
+        }
+      }
+    }
+
+    // 2. Canal de Vídeo 0 - Câmera (mid: 1)
+    if (cameraTransceiver) {
+      cameraTransceiver.direction = 'sendrecv'
+      const cameraTrack = stream?.getVideoTracks()[0] || null
+      if (cameraTransceiver.sender && cameraTransceiver.sender.track !== cameraTrack) {
+        try {
+          await cameraTransceiver.sender.replaceTrack(cameraTrack)
+        } catch (err) {
+          console.warn('[WebRTC] Erro ao sincronizar faixa de câmera:', err)
+        }
+      }
+    }
+
+    // 3. Canal de Vídeo 1 - Compartilhamento de Tela (mid: 2)
+    if (screenTransceiver) {
+      screenTransceiver.direction = 'sendrecv'
+      const screenTrack = screenStream?.getVideoTracks()[0] || null
+      if (screenTransceiver.sender) {
+        if (screenTransceiver.sender.track !== screenTrack) {
+          try {
+            await screenTransceiver.sender.replaceTrack(screenTrack)
+          } catch (err) {
+            console.warn('[WebRTC] Erro ao sincronizar faixa de tela:', err)
           }
+        }
+        if (screenTrack) {
+          try {
+            const params = screenTransceiver.sender.getParameters()
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}]
+            }
+            params.encodings[0].maxBitrate = 2000000 // 2.0 Mbps máx (evita acúmulo no buffer do Wi-Fi)
+            params.encodings[0].maxFramerate = 15
+            params.degradationPreference = 'maintain-resolution'
+            await screenTransceiver.sender.setParameters(params)
+          } catch {}
+        }
+      }
+    }
+  }, [])
+
+  // Vincula os receptores remotos (mid 0: Áudio, mid 1: Câmera, mid 2: Tela) aos respectivos elementos HTML
+  const attachRemoteReceiverTracks = useCallback((pc: RTCPeerConnection) => {
+    const transceivers = pc.getTransceivers()
+    const audioTransceiver =
+      transceivers.find((t) => t.mid === '0') ||
+      transceivers.find((t) => t.receiver.track?.kind === 'audio')
+    const videoTransceivers = transceivers.filter((t) => t.receiver.track?.kind === 'video')
+    const cameraTransceiver = transceivers.find((t) => t.mid === '1') || videoTransceivers[0]
+    const screenTransceiver = transceivers.find((t) => t.mid === '2') || videoTransceivers[1]
+
+    // 1. Áudio Remoto (mid: 0)
+    const remoteAudioTrack = audioTransceiver?.receiver?.track
+    if (remoteAudioTrack) {
+      remoteAudioTrack.onunmute = () => {
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = new MediaStream([remoteAudioTrack])
+          remoteAudioRef.current.play().catch((err) => {
+            if (err.name === 'NotAllowedError') setNeedsUserInteractionForAudio(true)
+          })
+        }
+      }
+      if (remoteAudioRef.current) {
+        const currentAudioTracks =
+          (remoteAudioRef.current.srcObject as MediaStream | null)?.getAudioTracks() || []
+        if (currentAudioTracks[0]?.id !== remoteAudioTrack.id) {
+          remoteAudioRef.current.srcObject = new MediaStream([remoteAudioTrack])
+        }
+        remoteAudioRef.current.play().catch((err) => {
+          if (err.name === 'NotAllowedError') setNeedsUserInteractionForAudio(true)
         })
       }
-      return pc
     }
 
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-    })
-
-    if (stream) {
-      stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream)
-      })
-    }
-
-    pc.ontrack = (event) => {
-      let incomingStream = event.streams[0]
-      if (!incomingStream) {
-        if (!remoteStreamRef.current) {
-          remoteStreamRef.current = new MediaStream()
-        }
-        remoteStreamRef.current.addTrack(event.track)
-        incomingStream = remoteStreamRef.current
-      } else {
-        remoteStreamRef.current = incomingStream
+    // 2. Câmera Remota (mid: 1)
+    const remoteCameraTrack = cameraTransceiver?.receiver?.track
+    if (remoteCameraTrack) {
+      if (!remoteStreamRef.current || remoteStreamRef.current.getVideoTracks()[0]?.id !== remoteCameraTrack.id) {
+        remoteStreamRef.current = new MediaStream([remoteCameraTrack])
       }
-
+      if (!remoteCameraTrack.muted) {
+        setRemoteIsVideoEnabled(true)
+      }
+      remoteCameraTrack.onunmute = () => {
+        setRemoteIsVideoEnabled(true)
+        remoteStreamRef.current = new MediaStream([remoteCameraTrack])
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.muted = true
+          remoteVideoRef.current.srcObject = remoteStreamRef.current
+          remoteVideoRef.current.play().catch(() => {})
+        }
+      }
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = incomingStream
+        const currentCamTracks =
+          (remoteVideoRef.current.srcObject as MediaStream | null)?.getVideoTracks() || []
+        if (
+          currentCamTracks[0]?.id !== remoteCameraTrack.id ||
+          remoteVideoRef.current.videoWidth === 0
+        ) {
+          remoteStreamRef.current = new MediaStream([remoteCameraTrack])
+          remoteVideoRef.current.srcObject = remoteStreamRef.current
+        }
+        remoteVideoRef.current.muted = true
         remoteVideoRef.current.play().catch(() => {})
       }
-      setHasRemoteStream(true)
     }
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate && sendMessage && !isDemoMode) {
-        sendMessage('RTC_ICE_CANDIDATE', event.candidate, sessionId)
+    // 3. Tela Compartilhada Remota (mid: 2)
+    const remoteScreenTrack = screenTransceiver?.receiver?.track
+    if (remoteScreenTrack) {
+      if (
+        !remoteScreenStreamRef.current ||
+        remoteScreenStreamRef.current.getVideoTracks()[0]?.id !== remoteScreenTrack.id
+      ) {
+        remoteScreenStreamRef.current = new MediaStream([remoteScreenTrack])
+      }
+      remoteScreenTrack.onunmute = () => {
+        remoteScreenStreamRef.current = new MediaStream([remoteScreenTrack])
+        if (remoteScreenVideoRef.current) {
+          remoteScreenVideoRef.current.muted = true
+          remoteScreenVideoRef.current.srcObject = remoteScreenStreamRef.current
+          remoteScreenVideoRef.current.play().catch(() => {})
+        }
+      }
+      if (remoteScreenVideoRef.current) {
+        const currentScreenTracks =
+          (remoteScreenVideoRef.current.srcObject as MediaStream | null)?.getVideoTracks() || []
+        if (
+          currentScreenTracks[0]?.id !== remoteScreenTrack.id ||
+          remoteScreenVideoRef.current.videoWidth === 0
+        ) {
+          remoteScreenStreamRef.current = new MediaStream([remoteScreenTrack])
+          remoteScreenVideoRef.current.srcObject = remoteScreenStreamRef.current
+        }
+        remoteScreenVideoRef.current.muted = true
+        remoteScreenVideoRef.current.play().catch(() => {})
       }
     }
+  }, [])
 
-    peerConnectionRef.current = pc
-    return pc
-  }, [sessionId, sendMessage, isDemoMode])
+  // Initialize WebRTC Peer Connection
+  const createPeerConnection = useCallback(
+    (streamToAttach?: MediaStream | null) => {
+      if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+        const pc = peerConnectionRef.current
+        if (pc.getTransceivers().length > 0) {
+          syncLocalTracksToPc(pc, streamToAttach)
+        }
+        return pc
+      }
 
-  // Iniciar Negociação WebRTC
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ],
+      })
+
+      pc.ontrack = () => {
+        setIsP2PConnected(true)
+        setHasRemoteStream(true)
+        attachRemoteReceiverTracks(pc)
+      }
+
+      pc.oniceconnectionstatechange = () => {
+        console.log('[WebRTC] iceConnectionState:', pc.iceConnectionState)
+        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          setIsP2PConnected(true)
+          setHasRemoteStream(true)
+          attachRemoteReceiverTracks(pc)
+        }
+      }
+
+      pc.onconnectionstatechange = () => {
+        console.log('[WebRTC] connectionState:', pc.connectionState)
+        if (pc.connectionState === 'connected') {
+          setIsP2PConnected(true)
+          setHasRemoteStream(true)
+          attachRemoteReceiverTracks(pc)
+        }
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && !isDemoMode) {
+          sendMessageRef.current?.('RTC_ICE_CANDIDATE', event.candidate, sessionId)
+        }
+      }
+
+      peerConnectionRef.current = pc
+      return pc
+    },
+    [sessionId, isDemoMode, syncLocalTracksToPc, attachRemoteReceiverTracks]
+  )
+
+  // Iniciar Negociação WebRTC de forma segura e idempotente (Tutor cria os 3 transceivers mid 0, 1, 2)
   const initiateOffer = useCallback(async () => {
     if (isDemoMode) return
-    const stream = await getOrWaitLocalStream()
-    const pc = createPeerConnection(stream)
+    console.log('[WebRTC] initiateOffer chamado por:', currentUser.role)
     try {
+      const stream = await getOrWaitLocalStream()
+      const pc = createPeerConnection(stream)
+
+      // Apenas quem cria a oferta inicial adiciona os 3 transceivers caso ainda não existam.
+      // Assim o Answerer (Aluno) cria exatamente os mesmos 3 transceivers (mid 0, 1, 2) via setRemoteDescription!
+      if (pc.getTransceivers().length === 0) {
+        pc.addTransceiver('audio', { direction: 'sendrecv' }) // mid: 0 (Áudio)
+        pc.addTransceiver('video', { direction: 'sendrecv' }) // mid: 1 (Câmera)
+        pc.addTransceiver('video', { direction: 'sendrecv' }) // mid: 2 (Compartilhamento de Tela)
+      }
+
+      await syncLocalTracksToPc(pc, stream)
+
+      if (pc.signalingState === 'stable') {
+        isNegotiatingRef.current = false
+      }
+
+      if (isNegotiatingRef.current && pc.signalingState !== 'stable') {
+        console.log('[WebRTC] Negociação já em andamento, ignorando nova oferta concorrente.')
+        return
+      }
+
+      if (pc.signalingState !== 'stable') {
+        console.log('[WebRTC] signalingState:', pc.signalingState)
+        if (pc.signalingState === 'have-local-offer' && pc.localDescription) {
+          console.log('[WebRTC] Reenviando oferta existente para o parceiro...')
+          sendMessageRef.current?.('RTC_OFFER', pc.localDescription, sessionId)
+        }
+        return
+      }
+
+      isNegotiatingRef.current = true
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
-      sendMessage?.('RTC_OFFER', offer, sessionId)
+      sendMessageRef.current?.('RTC_OFFER', offer, sessionId)
+      sendMessageRef.current?.(
+        'ROOM_MEDIA_STATE_CHANGED',
+        {
+          video: hasRealVideoRef.current && isVideoEnabledRef.current,
+          audio: hasRealAudioRef.current && isAudioEnabledRef.current,
+        },
+        sessionId
+      )
+      if (isScreenSharingRef.current) {
+        sendMessageRef.current?.(
+          'ROOM_SCREEN_SHARE_CHANGED',
+          { isSharing: true, hasAudio: screenHasAudioRef.current },
+          sessionId
+        )
+      }
+      console.log('[WebRTC] RTC_OFFER enviado com sucesso por:', currentUser.role)
     } catch (err) {
       console.warn('Erro ao criar WebRTC offer:', err)
+      isNegotiatingRef.current = false
     }
-  }, [createPeerConnection, getOrWaitLocalStream, isDemoMode, sendMessage, sessionId])
+  }, [createPeerConnection, getOrWaitLocalStream, syncLocalTracksToPc, isDemoMode, sessionId, currentUser.role])
+
+  // Debounce para evitar tempestade de ofertas em conexões simultâneas
+  const debouncedInitiateOffer = useCallback(() => {
+    if (offerTimeoutRef.current) clearTimeout(offerTimeoutRef.current)
+    offerTimeoutRef.current = setTimeout(() => {
+      initiateOffer()
+    }, 250)
+  }, [initiateOffer])
+
+  // Refs de estabilização para impedir loops infinitos de montagem e re-subscrição de sala
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  const debouncedInitiateOfferRef = useRef(debouncedInitiateOffer)
+  debouncedInitiateOfferRef.current = debouncedInitiateOffer
+
+  const initiateOfferRef = useRef(initiateOffer)
+  initiateOfferRef.current = initiateOffer
+
+  const sendMessageRef = useRef(sendMessage)
+  sendMessageRef.current = sendMessage
+
+  const getOrWaitLocalStreamRef = useRef(getOrWaitLocalStream)
+  getOrWaitLocalStreamRef.current = getOrWaitLocalStream
+
+  const createPeerConnectionRef = useRef(createPeerConnection)
+  createPeerConnectionRef.current = createPeerConnection
+
+  const syncLocalTracksToPcRef = useRef(syncLocalTracksToPc)
+  syncLocalTracksToPcRef.current = syncLocalTracksToPc
+
+  const attachRemoteReceiverTracksRef = useRef(attachRemoteReceiverTracks)
+  attachRemoteReceiverTracksRef.current = attachRemoteReceiverTracks
 
   // WebSocket Subscription for Real-time Sync (Draw, Chat, WebRTC, Call End)
   useEffect(() => {
-    if (isDemoMode || !subscribe || !sendMessage) return
+    if (isDemoMode || !subscribe) return
 
-    sendMessage('JOIN_ROOM', {}, sessionId)
+    sendMessageRef.current?.('JOIN_ROOM', {}, sessionId)
 
     const unsubscribe = subscribe(async (msg) => {
       if (msg.sessionId && msg.sessionId !== sessionId) return
 
-      // Se outro usuário entrou OU se o Tutor entrou e o Aluno já estava na sala
-      if (
-        (msg.type === 'USER_JOINED_ROOM' && currentUser.role === 'TUTOR') ||
-        (msg.type === 'ROOM_USERS' && currentUser.role === 'TUTOR')
-      ) {
-        initiateOffer()
+      if (msg.type === 'CONNECTED') {
+        sendMessageRef.current?.('JOIN_ROOM', {}, sessionId)
+      }
+
+      // Se outro usuário entrou OU se o Tutor entrou e o Aluno já estava na sala OU sob solicitação
+      if (msg.type === 'USER_JOINED_ROOM') {
+        setIsPartnerInRoom(true)
+        if (currentUser.role === 'TUTOR') {
+          debouncedInitiateOfferRef.current()
+        } else if (currentUser.role === 'STUDENT') {
+          sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+        }
+      }
+
+      if (msg.type === 'ROOM_USERS') {
+        const p = ((msg.payload as { participants?: unknown[] })?.participants) || []
+        if (p.length > 0) {
+          setIsPartnerInRoom(true)
+        }
+        if (currentUser.role === 'TUTOR') {
+          debouncedInitiateOfferRef.current()
+        }
+        if (currentUser.role === 'STUDENT') {
+          sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+        }
+      }
+
+      if (msg.type === 'REQUEST_OFFER') {
+        setIsPartnerInRoom(true)
+        if (currentUser.role === 'TUTOR') {
+          debouncedInitiateOfferRef.current()
+        }
+      }
+
+      // Notificação de Estado de Câmera/Microfone do Parceiro
+      if (msg.type === 'ROOM_MEDIA_STATE_CHANGED' && msg.payload) {
+        const payload = msg.payload as { video?: boolean; audio?: boolean }
+        if (payload.video !== undefined) setRemoteIsVideoEnabled(payload.video)
+        if (payload.audio !== undefined) setRemoteIsAudioEnabled(payload.audio)
+        if (peerConnectionRef.current) {
+          attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+        }
       }
 
       if (msg.type === 'RTC_OFFER' && msg.payload) {
-        // Aguarda a câmera/microfone do Aluno estarem prontos antes de responder à oferta
-        const stream = await getOrWaitLocalStream()
-        const pc = createPeerConnection(stream)
+        // Aguarda a mídia do usuário estar pronta antes de responder à oferta
+        const stream = await getOrWaitLocalStreamRef.current()
+        const pc = createPeerConnectionRef.current(stream)
         try {
+          // 1. Define a oferta remota PRIMEIRO (cria automaticamente os 3 transceivers mid 0, 1, 2 no Aluno!)
           await pc.setRemoteDescription(new RTCSessionDescription(msg.payload as RTCSessionDescriptionInit))
 
-          // Esvazia candidatos ICE recebidos antes do remoteDescription
+          // 2. Sincroniza as faixas locais do Aluno (Áudio, Câmera e Tela) nos 3 transceivers como 'sendrecv' ANTES do createAnswer!
+          await syncLocalTracksToPcRef.current(pc, stream)
+
+          // 3. Esvazia candidatos ICE recebidos antes do remoteDescription
           while (pendingIceCandidatesRef.current.length > 0) {
             const cand = pendingIceCandidatesRef.current.shift()
             if (cand) {
@@ -297,7 +613,32 @@ export function VirtualRoom({
 
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
-          sendMessage('RTC_ANSWER', answer, sessionId)
+          sendMessageRef.current?.('RTC_ANSWER', answer, sessionId)
+          sendMessageRef.current?.(
+            'ROOM_MEDIA_STATE_CHANGED',
+            {
+              video: hasRealVideoRef.current && isVideoEnabledRef.current,
+              audio: hasRealAudioRef.current && isAudioEnabledRef.current,
+            },
+            sessionId
+          )
+          if (isScreenSharingRef.current) {
+            sendMessageRef.current?.(
+              'ROOM_SCREEN_SHARE_CHANGED',
+              { isSharing: true, hasAudio: screenHasAudioRef.current },
+              sessionId
+            )
+          }
+
+          attachRemoteReceiverTracksRef.current(pc)
+          ;[120, 350, 800].forEach((delay) => {
+            setTimeout(() => {
+              if (peerConnectionRef.current) {
+                attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+              }
+            }, delay)
+          })
+          console.log('[WebRTC] RTC_ANSWER enviado com sucesso')
         } catch (err) {
           console.warn('Erro ao processar WebRTC offer:', err)
         }
@@ -308,14 +649,25 @@ export function VirtualRoom({
         if (pc) {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.payload as RTCSessionDescriptionInit))
+            console.log('[WebRTC] RTC_ANSWER processado com sucesso')
+            isNegotiatingRef.current = false
             while (pendingIceCandidatesRef.current.length > 0) {
               const cand = pendingIceCandidatesRef.current.shift()
               if (cand) {
                 await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(console.warn)
               }
             }
+            attachRemoteReceiverTracksRef.current(pc)
+            ;[120, 350, 800].forEach((delay) => {
+              setTimeout(() => {
+                if (peerConnectionRef.current) {
+                  attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+                }
+              }, delay)
+            })
           } catch (err) {
             console.warn('Erro ao processar WebRTC answer:', err)
+            isNegotiatingRef.current = false
           }
         }
       }
@@ -323,14 +675,28 @@ export function VirtualRoom({
       if (msg.type === 'RTC_ICE_CANDIDATE' && msg.payload) {
         const pc = peerConnectionRef.current
         const cand = msg.payload as RTCIceCandidateInit
-        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(cand))
-          } catch (err) {
-            console.warn('Erro ao adicionar ICE candidate:', err)
+
+        const candidatesToAdd: RTCIceCandidateInit[] = [cand]
+        if (cand.candidate && cand.candidate.includes('.local') && typeof window !== 'undefined') {
+          const hostIp = window.location.hostname
+          if (hostIp && hostIp !== 'localhost' && hostIp !== '127.0.0.1') {
+            candidatesToAdd.push({
+              ...cand,
+              candidate: cand.candidate.replace(/[a-zA-Z0-9-]+\.local/g, hostIp),
+            })
           }
-        } else {
-          pendingIceCandidatesRef.current.push(cand)
+        }
+
+        for (const c of candidatesToAdd) {
+          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(c))
+            } catch (err) {
+              console.warn('Erro ao adicionar ICE candidate:', err)
+            }
+          } else {
+            pendingIceCandidatesRef.current.push(c)
+          }
         }
       }
 
@@ -377,6 +743,24 @@ export function VirtualRoom({
         const payload = msg.payload as { isSharing: boolean; hasAudio?: boolean }
         setIsRemoteScreenSharing(!!payload.isSharing)
         setRemoteHasScreenAudio(!!payload.hasAudio)
+
+        if (payload.isSharing) {
+          if (peerConnectionRef.current) {
+            attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+          }
+          ;[50, 150, 350, 700, 1200].forEach((delay) => {
+            setTimeout(() => {
+              if (peerConnectionRef.current) {
+                attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+              }
+            }, delay)
+          })
+        } else {
+          if (remoteScreenVideoRef.current) {
+            remoteScreenVideoRef.current.srcObject = null
+          }
+          remoteScreenStreamRef.current = null
+        }
       }
 
       // Aluno encerrou a chamada -> Monitor fecha automaticamente
@@ -385,16 +769,35 @@ export function VirtualRoom({
           'O aluno encerrou a monitoria e enviou a avaliação de conformidade. A sala foi finalizada.'
         )
         setTimeout(() => {
-          onClose()
+          onCloseRef.current()
         }, 3000)
       }
     })
 
     return () => {
-      sendMessage('LEAVE_ROOM', {}, sessionId)
+      sendMessageRef.current?.('LEAVE_ROOM', {}, sessionId)
       unsubscribe()
     }
-  }, [isDemoMode, subscribe, sendMessage, sessionId, currentUser.role, createPeerConnection, initiateOffer, onClose, getOrWaitLocalStream])
+  }, [isDemoMode, subscribe, sessionId, currentUser.role])
+
+  // Auto-retry periódico para garantir sincronização caso o pacote inicial WebRTC tenha sido descartado na LAN
+  useEffect(() => {
+    if (isDemoMode) return
+    const retryTimer = setTimeout(() => {
+      const pc = peerConnectionRef.current
+      if (!isP2PConnected && pc && pc.connectionState !== 'connected' && pc.iceConnectionState !== 'connected') {
+        console.log('[WebRTC] Auto-retry (4s): parceiro não conectado, solicitando renegociação...')
+        if (currentUser.role === 'TUTOR') {
+          if (pc.signalingState === 'stable') {
+            initiateOfferRef.current()
+          }
+        } else {
+          sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+        }
+      }
+    }, 4000)
+    return () => clearTimeout(retryTimer)
+  }, [isP2PConnected, isDemoMode, currentUser.role, sessionId])
 
   // Initialize Canvas Fixed Dimensions once
   useEffect(() => {
@@ -411,99 +814,143 @@ export function VirtualRoom({
 
     async function initMedia() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        })
+        let stream: MediaStream | null = null
+
+        // 1. Tenta obter mídia real do navegador se a API estiver disponível
+        if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+          try {
+            // Tenta obter vídeo e áudio combinados
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: true,
+            })
+            hasRealVideoRef.current = true
+            hasRealAudioRef.current = true
+            setIsVideoEnabled(true)
+            setIsAudioEnabled(true)
+          } catch (comboErr) {
+            console.warn('Falha ao obter vídeo e áudio juntos. Tentando apenas áudio...', comboErr)
+            try {
+              // Fallback: Apenas áudio (ex: computadores sem webcam)
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: false,
+                audio: true,
+              })
+              hasRealAudioRef.current = true
+              hasRealVideoRef.current = false
+              setIsAudioEnabled(true)
+              setIsVideoEnabled(false)
+            } catch (audioOnlyErr) {
+              console.warn('Falha ao obter microfone. Tentando apenas vídeo...', audioOnlyErr)
+              try {
+                // Fallback: Apenas vídeo
+                stream = await navigator.mediaDevices.getUserMedia({
+                  video: true,
+                  audio: false,
+                })
+                hasRealVideoRef.current = true
+                hasRealAudioRef.current = false
+                setIsVideoEnabled(true)
+                setIsAudioEnabled(false)
+              } catch (videoOnlyErr) {
+                console.warn('Nenhum dispositivo físico de mídia ou permissão negada.', videoOnlyErr)
+              }
+            }
+          }
+        } else {
+          console.warn('navigator.mediaDevices não disponível (HTTP em rede local).')
+          setIsInsecureContextAlert(true)
+        }
+
+        // 2. Fallback de Trilha Sintética: Garante que WebRTC e os botões tenham trilha ativa
+        if (!stream) {
+          hasRealAudioRef.current = false
+          hasRealVideoRef.current = false
+          try {
+            const AudioContextClass =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+            if (AudioContextClass) {
+              const fallbackCtx = new AudioContextClass()
+              const dest = fallbackCtx.createMediaStreamDestination()
+              const osc = fallbackCtx.createOscillator()
+              const gain = fallbackCtx.createGain()
+              gain.gain.value = 0.00001
+              osc.connect(gain)
+              gain.connect(dest)
+              osc.start()
+              stream = dest.stream
+            } else {
+              stream = new MediaStream()
+            }
+          } catch {
+            stream = new MediaStream()
+          }
+          setIsAudioEnabled(false)
+          setIsVideoEnabled(false)
+        }
+
         localStreamRef.current = stream
         localStreamPromiseRef.current?.resolve(stream)
 
-        if (localVideoRef.current) {
+        if (localVideoRef.current && stream.getVideoTracks().length > 0) {
           localVideoRef.current.srcObject = stream
         }
 
         if (peerConnectionRef.current) {
-          const pc = peerConnectionRef.current
-          const senders = pc.getSenders()
-          let addedAny = false
-          stream.getTracks().forEach((track) => {
-            if (!senders.some((s) => s.track === track)) {
-              pc.addTrack(track, stream)
-              addedAny = true
-            }
-          })
-          if (addedAny && pc.signalingState === 'stable') {
-            initiateOffer()
-          }
+          await syncLocalTracksToPcRef.current(peerConnectionRef.current, stream)
         }
 
-        // Setup Audio Analyser for VU meter
-        try {
-          const AudioContextClass =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-          const audioCtx = new AudioContextClass()
-          audioContextRef.current = audioCtx
-          const source = audioCtx.createMediaStreamSource(stream)
-          const analyser = audioCtx.createAnalyser()
-          analyser.fftSize = 256
-          source.connect(analyser)
-
-          const dataArray = new Uint8Array(analyser.frequencyBinCount)
-          const updateVU = () => {
-            analyser.getByteFrequencyData(dataArray)
-            let sum = 0
-            for (let i = 0; i < dataArray.length; i++) {
-              sum += dataArray[i]
-            }
-            const average = sum / dataArray.length
-            setAudioVolumeLevel(Math.min(100, Math.round((average / 128) * 100)))
-            animationFrameId = requestAnimationFrame(updateVU)
-          }
-          updateVU()
-        } catch (audioErr) {
-          console.warn('Erro ao inicializar medidor de áudio:', audioErr)
+        if (!isDemoMode) {
+          sendMessageRef.current?.(
+            'ROOM_MEDIA_STATE_CHANGED',
+            {
+              video: hasRealVideoRef.current,
+              audio: hasRealAudioRef.current,
+            },
+            sessionId
+          )
         }
 
-        // Setup Continuous Pre-recording via MediaRecorder
-        try {
-          recordedChunksRef.current = []
-          const recorder = new MediaRecorder(stream, {
-            mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-              ? 'video/webm;codecs=vp9'
-              : 'video/webm',
-          })
+        // Setup Audio Analyser for VU meter se houver áudio
+        if (stream.getAudioTracks().length > 0) {
+          try {
+            const AudioContextClass =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+            const audioCtx = new AudioContextClass()
+            audioContextRef.current = audioCtx
+            const source = audioCtx.createMediaStreamSource(stream)
+            const analyser = audioCtx.createAnalyser()
+            analyser.fftSize = 256
+            source.connect(analyser)
 
-          recorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-              recordedChunksRef.current.push(event.data)
+            const dataArray = new Uint8Array(analyser.frequencyBinCount)
+            const updateVU = () => {
+              analyser.getByteFrequencyData(dataArray)
+              let sum = 0
+              for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i]
+              }
+              const average = sum / dataArray.length
+              setAudioVolumeLevel(Math.min(100, Math.round((average / 128) * 100)))
+              animationFrameId = requestAnimationFrame(updateVU)
             }
+            updateVU()
+          } catch (audioErr) {
+            console.warn('Erro ao inicializar medidor de áudio:', audioErr)
           }
-
-          recorder.start(1000)
-          mediaRecorderRef.current = recorder
-          setIsRecording(true)
-        } catch (recorderErr) {
-          console.warn('MediaRecorder não suportado:', recorderErr)
         }
       } catch (err) {
-        console.warn('Permissão de câmera/microfone não concedida:', err)
+        console.warn('Falha no initMedia:', err)
         localStreamPromiseRef.current?.reject(err)
       }
     }
 
     initMedia()
 
-    const timerInterval = setInterval(() => {
-      setRecordingDurationSeconds((prev) => prev + 1)
-    }, 1000)
-
     return () => {
-      clearInterval(timerInterval)
       cancelAnimationFrame(animationFrameId)
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop()
-      }
       if (screenAudioSourceRef.current) {
         try {
           screenAudioSourceRef.current.disconnect()
@@ -538,33 +985,175 @@ export function VirtualRoom({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Garante a vinculação e reprodução do fluxo remoto assim que montado ou atualizado
+  // Garante a vinculação e reprodução do fluxo da câmera remota
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStreamRef.current) {
-      remoteVideoRef.current.srcObject = remoteStreamRef.current
-      remoteVideoRef.current.play().catch(() => {})
+    if (peerConnectionRef.current) {
+      attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
     }
-  }, [hasRemoteStream])
+  }, [hasRemoteStream, remoteIsVideoEnabled, isP2PConnected])
+
+  // Garante a vinculação e reprodução do fluxo da tela compartilhada remota
+  useEffect(() => {
+    if (isRemoteScreenSharing && peerConnectionRef.current) {
+      attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+      const timers = [60, 200, 500].map((delay) =>
+        setTimeout(() => {
+          if (peerConnectionRef.current) {
+            attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+          }
+        }, delay)
+      )
+      return () => timers.forEach(clearTimeout)
+    }
+  }, [isRemoteScreenSharing])
+
+  // Garante a vinculação da tela local assim que o compartilhamento de tela for ativado
+  useEffect(() => {
+    if (isScreenSharing && screenStreamRef.current && screenVideoRef.current) {
+      if (screenVideoRef.current.srcObject !== screenStreamRef.current) {
+        screenVideoRef.current.srcObject = screenStreamRef.current
+      }
+      screenVideoRef.current.play().catch(() => {})
+    }
+  }, [isScreenSharing])
 
   // Toggle Camera
-  function toggleVideo() {
-    if (localStreamRef.current) {
+  async function toggleVideo() {
+    if (hasRealVideoRef.current && localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
       const videoTrack = localStreamRef.current.getVideoTracks()[0]
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled
-        setIsVideoEnabled(videoTrack.enabled)
+      videoTrack.enabled = !videoTrack.enabled
+      isVideoEnabledRef.current = videoTrack.enabled
+      setIsVideoEnabled(videoTrack.enabled)
+      if (!isDemoMode) {
+        sendMessageRef.current?.('ROOM_MEDIA_STATE_CHANGED', { video: videoTrack.enabled }, sessionId)
       }
+      return
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+        const newTrack = stream.getVideoTracks()[0]
+        if (newTrack) {
+          hasRealVideoRef.current = true
+          if (!localStreamRef.current) {
+            localStreamRef.current = new MediaStream()
+          } else {
+            localStreamRef.current.getVideoTracks().forEach((t) => {
+              t.stop()
+              localStreamRef.current?.removeTrack(t)
+            })
+          }
+          localStreamRef.current.addTrack(newTrack)
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = localStreamRef.current
+            localVideoRef.current.play().catch(() => {})
+          }
+          isVideoEnabledRef.current = true
+          setIsVideoEnabled(true)
+          if (!isDemoMode) {
+            sendMessageRef.current?.('ROOM_MEDIA_STATE_CHANGED', { video: true }, sessionId)
+          }
+
+          const pc = peerConnectionRef.current
+          if (pc) {
+            await syncLocalTracksToPc(pc, localStreamRef.current)
+            if (pc.signalingState === 'stable') {
+              if (currentUser.role === 'TUTOR') {
+                debouncedInitiateOfferRef.current()
+              } else {
+                sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+              }
+            }
+          }
+        }
+      } catch {
+        alert('Câmera não detectada ou permissão negada neste computador.')
+      }
+    } else {
+      setIsInsecureContextAlert(true)
     }
   }
 
   // Toggle Microphone
-  function toggleAudio() {
-    if (localStreamRef.current) {
+  async function toggleAudio() {
+    if (hasRealAudioRef.current && localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0]
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled
-        setIsAudioEnabled(audioTrack.enabled)
+      audioTrack.enabled = !audioTrack.enabled
+      isAudioEnabledRef.current = audioTrack.enabled
+      setIsAudioEnabled(audioTrack.enabled)
+      if (!isDemoMode) {
+        sendMessageRef.current?.('ROOM_MEDIA_STATE_CHANGED', { audio: audioTrack.enabled }, sessionId)
       }
+      return
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const newTrack = stream.getAudioTracks()[0]
+        if (newTrack) {
+          hasRealAudioRef.current = true
+          if (!localStreamRef.current) {
+            localStreamRef.current = new MediaStream()
+          } else {
+            localStreamRef.current.getAudioTracks().forEach((t) => {
+              t.stop()
+              localStreamRef.current?.removeTrack(t)
+            })
+          }
+          localStreamRef.current.addTrack(newTrack)
+          isAudioEnabledRef.current = true
+          setIsAudioEnabled(true)
+          if (!isDemoMode) {
+            sendMessageRef.current?.('ROOM_MEDIA_STATE_CHANGED', { audio: true }, sessionId)
+          }
+
+          const pc = peerConnectionRef.current
+          if (pc) {
+            await syncLocalTracksToPc(pc, localStreamRef.current)
+            if (pc.signalingState === 'stable') {
+              if (currentUser.role === 'TUTOR') {
+                debouncedInitiateOfferRef.current()
+              } else {
+                sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+              }
+            }
+          }
+
+          // Reinicializa o VU meter com o microfone real
+          try {
+            const AudioContextClass =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+            if (AudioContextClass) {
+              const audioCtx = new AudioContextClass()
+              audioContextRef.current = audioCtx
+              const source = audioCtx.createMediaStreamSource(localStreamRef.current)
+              const analyser = audioCtx.createAnalyser()
+              analyser.fftSize = 256
+              source.connect(analyser)
+
+              const dataArray = new Uint8Array(analyser.frequencyBinCount)
+              const updateVU = () => {
+                analyser.getByteFrequencyData(dataArray)
+                let sum = 0
+                for (let i = 0; i < dataArray.length; i++) {
+                  sum += dataArray[i]
+                }
+                const average = sum / dataArray.length
+                setAudioVolumeLevel(Math.min(100, Math.round((average / 128) * 100)))
+                requestAnimationFrame(updateVU)
+              }
+              updateVU()
+            }
+          } catch {}
+        }
+      } catch {
+        alert('Microfone não detectado ou permissão negada neste computador.')
+      }
+    } else {
+      setIsInsecureContextAlert(true)
     }
   }
 
@@ -596,74 +1185,103 @@ export function VirtualRoom({
       screenStreamRef.current = null
     }
 
-    // 3. Restaurar tracks originais no WebRTC PeerConnection
-    if (peerConnectionRef.current && localStreamRef.current) {
-      const videoTrack = localStreamRef.current.getVideoTracks()[0]
-      const videoSender = peerConnectionRef.current
-        .getSenders()
-        .find((s) => s.track?.kind === 'video')
-      if (videoSender && videoTrack) {
-        await videoSender.replaceTrack(videoTrack).catch(console.warn)
-      }
-
-      const micTrack = localStreamRef.current.getAudioTracks()[0]
-      const audioSender = peerConnectionRef.current
-        .getSenders()
-        .find((s) => s.track?.kind === 'audio')
-      if (audioSender && micTrack) {
-        await audioSender.replaceTrack(micTrack).catch(console.warn)
-      }
+    if (screenVideoRef.current) {
+      screenVideoRef.current.srcObject = null
     }
 
+    isScreenSharingRef.current = false
+    screenHasAudioRef.current = false
     setIsScreenSharing(false)
     setScreenHasAudio(false)
 
-    if (sendMessage && !isDemoMode) {
-      sendMessage('ROOM_SCREEN_SHARE_CHANGED', { isSharing: false, hasAudio: false }, sessionId)
+    // 3. Restaurar tracks no WebRTC PeerConnection (Câmera continua ativa; limpa canal de tela mid 2)
+    const pc = peerConnectionRef.current
+    if (pc) {
+      await syncLocalTracksToPc(pc, localStreamRef.current)
     }
-  }, [sessionId, sendMessage, isDemoMode])
+
+    if (!isDemoMode) {
+      sendMessageRef.current?.('ROOM_SCREEN_SHARE_CHANGED', { isSharing: false, hasAudio: false }, sessionId)
+    }
+
+    if (pc && pc.signalingState === 'stable') {
+      if (currentUser.role === 'TUTOR') {
+        debouncedInitiateOfferRef.current()
+      } else {
+        sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+      }
+    }
+  }, [sessionId, isDemoMode, currentUser.role, syncLocalTracksToPc])
 
   // Alternar Compartilhamento de Tela / Janela com Áudio (Estilo Discord)
   async function toggleScreenSharing() {
     if (isScreenSharing) {
       await stopScreenSharing()
     } else {
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
+        setIsInsecureContextAlert(true)
+        alert(
+          'O compartilhamento de tela exige uma origem segura (HTTPS ou localhost) ou a flag habilitada no Chrome/Edge deste computador: chrome://flags/#unsafely-treat-insecure-origin-as-secure'
+        )
+        return
+      }
+
       try {
-        // Solicita captura de tela permitindo escolha de Tela Inteira, Janela específica ou Guia
-        // com inclusão explícita de áudio do sistema/aplicativo (estilo Discord)
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            cursor: 'always',
-            displaySurface: 'monitor',
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          systemAudio: 'include',
-          selfBrowserSurface: 'exclude',
-          surfaceSwitching: 'include',
-        } as unknown as MediaStreamConstraints)
+        let displayStream: MediaStream
+        try {
+          // Permite escolha de Tela Inteira, Janela específica ou Guia com áudio (Taxa de quadros e resolução otimizadas para latência zero)
+          displayStream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              frameRate: { max: 15, ideal: 15 },
+              width: { max: 1920 },
+              height: { max: 1080 },
+            },
+            audio: true,
+          })
+        } catch (audioErr) {
+          console.warn('Captura com áudio falhou ou não suportada, tentando apenas vídeo:', audioErr)
+          displayStream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              frameRate: { max: 15, ideal: 15 },
+              width: { max: 1920 },
+              height: { max: 1080 },
+            },
+            audio: false,
+          })
+        }
 
         screenStreamRef.current = displayStream
-        if (screenVideoRef.current) {
-          screenVideoRef.current.srcObject = displayStream
-        }
+        isScreenSharingRef.current = true
+        setIsScreenSharing(true)
 
         const screenVideoTrack = displayStream.getVideoTracks()[0]
         const screenAudioTracks = displayStream.getAudioTracks()
         const hasAudio = screenAudioTracks.length > 0
+        screenHasAudioRef.current = hasAudio
+        setScreenHasAudio(hasAudio)
 
-        // Substitui a track de vídeo na conexão WebRTC para transmitir a tela para o parceiro
-        if (peerConnectionRef.current && screenVideoTrack) {
-          const videoSender = peerConnectionRef.current
-            .getSenders()
-            .find((s) => s.track?.kind === 'video')
-          if (videoSender) {
-            await videoSender.replaceTrack(screenVideoTrack)
+        if (screenVideoTrack) {
+          screenVideoTrack.onunmute = () => {
+            if (screenVideoRef.current) {
+              screenVideoRef.current.play().catch(() => {})
+            }
           }
         }
+
+        ;[30, 100, 250].forEach((delay) => {
+          setTimeout(() => {
+            const el = screenVideoRef.current
+            if (el && displayStream) {
+              el.muted = true
+              if (el.srcObject !== displayStream) {
+                el.srcObject = displayStream
+              }
+              el.play().catch(() => {})
+            }
+          }, delay)
+        })
+
+        const pc = peerConnectionRef.current
 
         // Mixagem de Áudio estilo Discord: Microfone + Áudio da Janela/Sistema
         if (hasAudio) {
@@ -695,32 +1313,31 @@ export function VirtualRoom({
             const screenSource = audioCtx.createMediaStreamSource(screenAudioStream)
             screenSource.connect(mixedDestination)
             screenAudioSourceRef.current = screenSource
-
-            // Transmite o fluxo de áudio combinado pelo WebRTC
-            const mixedTrack = mixedDestination.stream.getAudioTracks()[0]
-            if (peerConnectionRef.current && mixedTrack) {
-              const audioSender = peerConnectionRef.current
-                .getSenders()
-                .find((s) => s.track?.kind === 'audio')
-              if (audioSender) {
-                await audioSender.replaceTrack(mixedTrack)
-              }
-            }
           } catch (audioMixErr) {
             console.warn('Erro ao mixar áudio da tela com microfone:', audioMixErr)
           }
         }
 
         // Trata o botão nativo flutuante do navegador "Interromper compartilhamento"
-        screenVideoTrack.onended = () => {
-          stopScreenSharing()
+        if (screenVideoTrack) {
+          screenVideoTrack.onended = () => {
+            stopScreenSharing()
+          }
         }
 
-        setIsScreenSharing(true)
-        setScreenHasAudio(hasAudio)
+        // Sincroniza a faixa de tela (mid 2) e o áudio mixado (mid 0) no PeerConnection
+        if (pc) {
+          await syncLocalTracksToPc(pc, localStreamRef.current)
+          if (currentUser.role === 'TUTOR') {
+            isNegotiatingRef.current = false
+            initiateOfferRef.current()
+          } else {
+            sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+          }
+        }
 
-        if (sendMessage && !isDemoMode) {
-          sendMessage('ROOM_SCREEN_SHARE_CHANGED', { isSharing: true, hasAudio }, sessionId)
+        if (!isDemoMode) {
+          sendMessageRef.current?.('ROOM_SCREEN_SHARE_CHANGED', { isSharing: true, hasAudio }, sessionId)
         }
       } catch (err) {
         console.warn('Compartilhamento de tela cancelado pelo usuário ou não suportado:', err)
@@ -847,10 +1464,8 @@ export function VirtualRoom({
         sendMessage?.('CALL_ENDED_BY_STUDENT', { resolved: true }, sessionId)
       }
 
-      recordedChunksRef.current = []
-
       setActionSuccessMessage(
-        'Sessão finalizada com sucesso! A gravação foi descartada e o Pix em custódia foi liberado para o monitor.'
+        'Sessão finalizada com sucesso! O Pix em custódia foi liberado para o monitor.'
       )
 
       setTimeout(() => {
@@ -866,7 +1481,7 @@ export function VirtualRoom({
     }
   }
 
-  // Abrir Disputa com Gravação Anexada (EXCLUSIVO ALUNO)
+  // Abrir Disputa de Dúvida Não Sanada (EXCLUSIVO ALUNO)
   async function handleConfirmDispute() {
     if (!disputeReason.trim() || disputeReason.length < 5) {
       alert('Por favor, descreva em detalhes por que sua dúvida não foi sanada.')
@@ -875,23 +1490,15 @@ export function VirtualRoom({
 
     setIsSubmittingFinish(true)
     try {
-      const videoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' })
-
       if (!isDemoMode) {
-        const formData = new FormData()
-        formData.append('reason', disputeReason)
-        formData.append('video', videoBlob, `session-${sessionId}-dispute.webm`)
-
-        await api.post(`/sessions/${sessionId}/dispute-with-recording`, formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+        await api.post(`/sessions/${sessionId}/dispute`, {
+          reason: disputeReason,
         })
         sendMessage?.('CALL_ENDED_BY_STUDENT', { resolved: false }, sessionId)
       }
 
       setActionSuccessMessage(
-        'Ticket de ouvidoria aberto com sucesso! A gravação desta chamada foi enviada com segurança para análise pela administração do Hintlink. O pagamento em custódia foi congelado.'
+        'Ticket de ouvidoria aberto com sucesso! O caso foi enviado para análise da administração do Hintlink e o pagamento em custódia foi congelado.'
       )
 
       setTimeout(() => {
@@ -899,7 +1506,7 @@ export function VirtualRoom({
       }, 3000)
     } catch (err: unknown) {
       const msg = axios.isAxiosError(err)
-        ? err.response?.data?.message || 'Erro ao enviar contestação com gravação.'
+        ? err.response?.data?.message || 'Erro ao enviar contestação.'
         : 'Erro inesperado.'
       alert(msg)
     } finally {
@@ -907,14 +1514,30 @@ export function VirtualRoom({
     }
   }
 
-  const formatTime = (secs: number) => {
-    const mins = Math.floor(secs / 60)
-    const s = secs % 60
-    return `${mins.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
-  }
-
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 text-white flex flex-col font-sans select-none overflow-hidden">
+      {/* Alerta de Contexto Inseguro (HTTP na Rede Local) */}
+      {isInsecureContextAlert && (
+        <div className="bg-amber-500/20 border-b border-amber-500/40 text-amber-200 px-4 py-2 text-xs sm:text-sm flex items-center justify-between gap-3 z-50">
+          <div className="flex items-center gap-2">
+            <span className="text-base">⚠️</span>
+            <span>
+              <strong>Aviso de Rede Local:</strong> O navegador bloqueia microfone e captura de tela em conexões HTTP fora de localhost. Para liberar no Chrome/Edge deste computador, ative a flag:
+              <code className="mx-1 bg-black/40 px-1.5 py-0.5 rounded text-amber-300 font-mono text-xs select-all">
+                chrome://flags/#unsafely-treat-insecure-origin-as-secure
+              </code>
+              adicionando <code className="bg-black/40 px-1.5 py-0.5 rounded text-amber-300 font-mono text-xs">{typeof window !== 'undefined' ? window.location.origin : ''}</code> e reinicie o navegador.
+            </span>
+          </div>
+          <button
+            onClick={() => setIsInsecureContextAlert(false)}
+            className="text-amber-300 hover:text-white font-bold text-xs px-2 py-1 rounded bg-amber-500/30 whitespace-nowrap"
+          >
+            Entendi
+          </button>
+        </div>
+      )}
+
       {/* Top Bar da Chamada */}
       <header className="h-16 px-4 sm:px-6 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -924,14 +1547,6 @@ export function VirtualRoom({
               {isDemoMode ? '🧪 Laboratório de Testes de Chamada (UFABC)' : 'Sala de Monitoria Hintlink'}
             </span>
           </div>
-
-          {/* Badge de Gravação Contínua de Segurança */}
-          {isRecording && (
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-rose-950/80 border border-rose-800/80 text-rose-300 text-xs font-bold">
-              <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping"></span>
-              <span>Gravação de Segurança Ativa ({formatTime(recordingDurationSeconds)})</span>
-            </div>
-          )}
 
           {/* Badge de Custódia Pix */}
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/60 border border-amber-800/60 text-brand-yellow text-xs font-semibold">
@@ -967,7 +1582,25 @@ export function VirtualRoom({
         </div>
 
         {/* Ações Direitas */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            onClick={() => {
+              sendMessageRef.current?.('JOIN_ROOM', {}, sessionId)
+              if (currentUser.role === 'TUTOR') {
+                isNegotiatingRef.current = false
+                initiateOfferRef.current()
+              } else {
+                sendMessageRef.current?.('REQUEST_OFFER', {}, sessionId)
+              }
+            }}
+            title="Clique para reconectar áudio e vídeo P2P"
+            className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 flex items-center gap-1.5 transition-all shadow-sm"
+          >
+            <span className={`w-2 h-2 rounded-full ${isP2PConnected ? 'bg-emerald-400 shadow-sm shadow-emerald-400/80' : 'bg-amber-400 animate-ping'}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${!isP2PConnected ? 'text-amber-400 animate-spin' : 'text-emerald-400'}`} />
+            <span className="hidden sm:inline">{isP2PConnected ? 'P2P Ativo' : 'Reconectar'}</span>
+          </button>
+
           <button
             onClick={() => setIsChatOpen(!isChatOpen)}
             className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all ${
@@ -1022,169 +1655,347 @@ export function VirtualRoom({
                 : 'absolute top-4 right-4 z-30 flex flex-col sm:flex-row gap-2 bg-slate-950/90 p-2.5 rounded-2xl border border-slate-700/80 shadow-2xl backdrop-blur-md'
             }`}
           >
-            {/* Local Video Box */}
-            <div
-              className={`relative bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center transition-all ${
-                focusMode === 'VIDEO' ? 'w-full h-full' : 'w-36 h-24 sm:w-44 sm:h-28'
-              }`}
-            >
-              {isScreenSharing ? (
+            {/* COLUNA 1: USUÁRIO LOCAL (Você) */}
+            <div className={`flex flex-col gap-3 min-h-0 ${focusMode === 'VIDEO' ? 'w-full h-full' : ''}`}>
+              {/* Quadro da Câmera Local */}
+              <div
+                className={`relative bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center transition-all ${
+                  focusMode === 'VIDEO'
+                    ? isScreenSharing
+                      ? 'h-1/2 flex-1'
+                      : 'h-full flex-1'
+                    : 'w-36 h-24 sm:w-44 sm:h-28'
+                }`}
+              >
                 <video
-                  ref={screenVideoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-full h-full object-contain bg-black"
-                />
-              ) : (
-                <video
-                  ref={localVideoRef}
+                  ref={(el) => {
+                    localVideoRef.current = el
+                    if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
+                      el.srcObject = localStreamRef.current
+                      el.play().catch(() => {})
+                    }
+                  }}
                   autoPlay
                   muted
                   playsInline
                   className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''}`}
                 />
-              )}
 
-              {!isScreenSharing && !isVideoEnabled && (
-                <div className="flex flex-col items-center justify-center text-slate-500">
+                {!isVideoEnabled && (
+                  <div className="flex flex-col items-center justify-center text-slate-500">
+                    <div
+                      className={`rounded-full bg-slate-800 flex items-center justify-center font-bold text-slate-400 ${
+                        focusMode === 'VIDEO' ? 'h-20 w-20 text-2xl mb-3' : 'h-10 w-10 text-sm'
+                      }`}
+                    >
+                      {currentUser.name.charAt(0).toUpperCase()}
+                    </div>
+                    {focusMode === 'VIDEO' && <p className="font-semibold text-sm">Câmera Desligada</p>}
+                  </div>
+                )}
+
+                {/* Card do Usuário Local */}
+                <div
+                  className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 flex-wrap ${
+                    focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
+                  }`}
+                >
+                  <span className="font-bold text-slate-100 flex items-center gap-1">
+                    {`Você (${currentUser.name.split(' ')[0]})`}
+                  </span>
+
+                  {!isAudioEnabled && <MicOff className="w-3 h-3 text-rose-400" />}
+
+                  {/* VU Meter */}
+                  {isAudioEnabled && (
+                    <div className="flex items-center gap-0.5 ml-1">
+                      <span
+                        className="w-1 bg-emerald-400 rounded-full transition-all"
+                        style={{ height: `${Math.max(3, (audioVolumeLevel / 100) * 12)}px` }}
+                      ></span>
+                      <span
+                        className="w-1 bg-emerald-400 rounded-full transition-all"
+                        style={{ height: `${Math.max(3, (audioVolumeLevel / 100) * 16)}px` }}
+                      ></span>
+                      <span
+                        className="w-1 bg-emerald-400 rounded-full transition-all"
+                        style={{ height: `${Math.max(3, (audioVolumeLevel / 100) * 10)}px` }}
+                      ></span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Novo Quadro: Adicionado ABAIXO da câmera com a Tela Compartilhada do Usuário Local */}
+              {isScreenSharing && (
+                <div
+                  className={`relative bg-slate-950 rounded-2xl overflow-hidden border border-indigo-500/50 shadow-2xl flex items-center justify-center transition-all ${
+                    focusMode === 'VIDEO' ? 'h-1/2 flex-1' : 'w-36 h-24 sm:w-44 sm:h-28'
+                  }`}
+                >
+                  <video
+                    ref={(el) => {
+                      screenVideoRef.current = el
+                      if (el) {
+                        el.muted = true
+                        if (screenStreamRef.current && el.srcObject !== screenStreamRef.current) {
+                          el.srcObject = screenStreamRef.current
+                        }
+                        el.play().catch(() => {})
+                      }
+                    }}
+                    autoPlay
+                    muted
+                    playsInline
+                    onLoadedMetadata={(e) => {
+                      const v = e.target as HTMLVideoElement
+                      v.muted = true
+                      v.play().catch(() => {})
+                    }}
+                    className="w-full h-full object-contain bg-black"
+                  />
+
                   <div
-                    className={`rounded-full bg-slate-800 flex items-center justify-center font-bold text-slate-400 ${
-                      focusMode === 'VIDEO' ? 'h-20 w-20 text-2xl mb-3' : 'h-10 w-10 text-sm'
+                    className={`absolute bottom-2 left-2 bg-slate-950/85 backdrop-blur-md rounded-xl border border-indigo-500/40 flex items-center gap-2 ${
+                      focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
                     }`}
                   >
-                    {currentUser.name.charAt(0).toUpperCase()}
+                    <span className="font-bold text-indigo-300 flex items-center gap-1.5">
+                      <span>🖥️</span>
+                      <span>Sua Tela/Janela Compartilhada</span>
+                    </span>
+                    {screenHasAudio && (
+                      <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 text-[10px] font-bold">
+                        🔊 Áudio Ativo
+                      </span>
+                    )}
                   </div>
-                  {focusMode === 'VIDEO' && <p className="font-semibold text-sm">Câmera Desligada</p>}
                 </div>
               )}
-
-              {/* Card do Usuário Local */}
-              <div
-                className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 flex-wrap ${
-                  focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
-                }`}
-              >
-                <span className="font-bold text-slate-100 flex items-center gap-1">
-                  {isScreenSharing ? (
-                    <>
-                      <span>🖥️</span>
-                      <span>Sua Tela/Janela</span>
-                    </>
-                  ) : (
-                    `Você (${currentUser.name.split(' ')[0]})`
-                  )}
-                </span>
-
-                {isScreenSharing && screenHasAudio && (
-                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 text-[10px] font-bold flex items-center gap-1">
-                    🔊 Áudio Ativo
-                  </span>
-                )}
-
-                {!isScreenSharing && !isAudioEnabled && <MicOff className="w-3 h-3 text-rose-400" />}
-
-                {/* VU Meter */}
-                {!isScreenSharing && isAudioEnabled && (
-                  <div className="flex items-center gap-0.5 ml-1">
-                    <span
-                      className="w-1 bg-emerald-400 rounded-full transition-all"
-                      style={{ height: `${Math.max(3, (audioVolumeLevel / 100) * 12)}px` }}
-                    ></span>
-                    <span
-                      className="w-1 bg-emerald-400 rounded-full transition-all"
-                      style={{ height: `${Math.max(3, (audioVolumeLevel / 100) * 16)}px` }}
-                    ></span>
-                    <span
-                      className="w-1 bg-emerald-400 rounded-full transition-all"
-                      style={{ height: `${Math.max(3, (audioVolumeLevel / 100) * 10)}px` }}
-                    ></span>
-                  </div>
-                )}
-              </div>
             </div>
 
-            {/* Remote Video Box (Fluxo Real do Parceiro via WebRTC) */}
-            <div
-              className={`relative bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center transition-all ${
-                focusMode === 'VIDEO' ? 'w-full h-full' : 'w-36 h-24 sm:w-44 sm:h-28'
-              }`}
-            >
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                muted={isSpeakerMuted}
-                onLoadedMetadata={(e) => {
-                  ;(e.target as HTMLVideoElement).play().catch(() => {})
-                }}
-                className={`w-full h-full ${
-                  isRemoteScreenSharing ? 'object-contain bg-black' : 'object-cover'
-                } ${!hasRemoteStream && !isDemoMode ? 'hidden' : ''}`}
-              />
-
-              {!hasRemoteStream && !isDemoMode && (
-                <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400">
-                  <div
-                    className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
-                      focusMode === 'VIDEO' ? 'h-16 w-16 text-2xl mb-2' : 'h-8 w-8 text-xs'
-                    }`}
-                  >
-                    👥
-                  </div>
-                  {focusMode === 'VIDEO' && (
-                    <>
-                      <p className="font-extrabold text-slate-200 text-sm">Aguardando Parceiro</p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Sincronizando áudio e vídeo P2P...</p>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {isDemoMode && !hasRemoteStream && (
-                <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400">
-                  <div
-                    className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
-                      focusMode === 'VIDEO' ? 'h-16 w-16 text-2xl mb-2' : 'h-8 w-8 text-xs'
-                    }`}
-                  >
-                    LM
-                  </div>
-                  {focusMode === 'VIDEO' && (
-                    <>
-                      <p className="font-extrabold text-slate-200 text-sm">Prof. Lucas Mendes (Monitor)</p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Ambiente de Demonstração</p>
-                    </>
-                  )}
-                </div>
-              )}
-
+            {/* COLUNA 2: PARCEIRO REMOTO */}
+            <div className={`flex flex-col gap-3 min-h-0 ${focusMode === 'VIDEO' ? 'w-full h-full' : ''}`}>
+              {/* Quadro da Câmera Remota */}
               <div
-                className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 flex-wrap ${
-                  focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
+                className={`relative bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-xl flex items-center justify-center transition-all ${
+                  focusMode === 'VIDEO'
+                    ? isRemoteScreenSharing
+                      ? 'h-1/2 flex-1'
+                      : 'h-full flex-1'
+                    : 'w-36 h-24 sm:w-44 sm:h-28'
                 }`}
               >
-                <span className="font-bold text-slate-100 flex items-center gap-1">
-                  {isRemoteScreenSharing ? (
-                    <>
+                {/* Canal de Áudio Remoto Dedicado (Garante reprodução incondicional mesmo com câmera desligada) */}
+                <audio
+                  ref={(el) => {
+                    remoteAudioRef.current = el
+                    if (el && remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
+                      el.srcObject = remoteStreamRef.current
+                      el.play().catch((err) => {
+                        if (err.name === 'NotAllowedError') setNeedsUserInteractionForAudio(true)
+                      })
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted={isSpeakerMuted}
+                />
+
+                <video
+                  ref={(el) => {
+                    remoteVideoRef.current = el
+                    if (el) {
+                      el.muted = true
+                      if (remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
+                        el.srcObject = remoteStreamRef.current
+                      } else if (peerConnectionRef.current) {
+                        attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+                      }
+                      el.play().catch(() => {})
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted
+                  onLoadedMetadata={(e) => {
+                    const v = e.target as HTMLVideoElement
+                    v.muted = true
+                    v.play().catch(() => {})
+                  }}
+                  className={`w-full h-full object-cover ${(!remoteIsVideoEnabled || !isP2PConnected) && !isDemoMode ? 'hidden' : ''}`}
+                />
+
+                {/* Se P2P está conectado mas a câmera do parceiro está desligada */}
+                {isP2PConnected && !remoteIsVideoEnabled && !isDemoMode && (
+                  <div className="flex flex-col items-center justify-center text-slate-400">
+                    <div
+                      className={`rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-slate-300 ${
+                        focusMode === 'VIDEO' ? 'h-20 w-20 text-2xl mb-3' : 'h-10 w-10 text-sm'
+                      }`}
+                    >
+                      {isStudent ? 'M' : 'A'}
+                    </div>
+                    {focusMode === 'VIDEO' && (
+                      <>
+                        <p className="font-extrabold text-slate-200 text-sm">
+                          {isStudent ? 'Monitor' : 'Aluno'}
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Câmera Desligada • Áudio Conectado 🎙️</p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Se o parceiro está na sala mas o P2P ainda está sincronizando */}
+                {isPartnerInRoom && !isP2PConnected && !isDemoMode && (
+                  <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400 animate-pulse">
+                    <div
+                      className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
+                        focusMode === 'VIDEO' ? 'h-16 w-16 text-2xl mb-2' : 'h-8 w-8 text-xs'
+                      }`}
+                    >
+                      🔄
+                    </div>
+                    {focusMode === 'VIDEO' && (
+                      <>
+                        <p className="font-extrabold text-slate-200 text-sm">Sincronizando Chamada...</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Estabelecendo conexão P2P de áudio e vídeo...</p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Se o parceiro ainda não entrou na sala */}
+                {!isPartnerInRoom && !isP2PConnected && !isDemoMode && (
+                  <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400">
+                    <div
+                      className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
+                        focusMode === 'VIDEO' ? 'h-16 w-16 text-2xl mb-2' : 'h-8 w-8 text-xs'
+                      }`}
+                    >
+                      👥
+                    </div>
+                    {focusMode === 'VIDEO' && (
+                      <>
+                        <p className="font-extrabold text-slate-200 text-sm">Aguardando Parceiro</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">O link da sala está aberto aguardando entrada.</p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Botão de desbloqueio caso a Autoplay Policy do navegador pause o áudio */}
+                {needsUserInteractionForAudio && (
+                  <div className="absolute inset-0 z-30 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-4 text-center">
+                    <p className="text-white text-sm font-bold mb-3">
+                      🔊 O navegador requer confirmação para liberar o áudio/vídeo da chamada.
+                    </p>
+                    <button
+                      onClick={() => {
+                        if (remoteAudioRef.current) {
+                          remoteAudioRef.current.play().catch(() => {})
+                        }
+                        if (remoteVideoRef.current) {
+                          remoteVideoRef.current.play().catch(() => {})
+                        }
+                        if (remoteScreenVideoRef.current) {
+                          remoteScreenVideoRef.current.play().catch(() => {})
+                        }
+                        setNeedsUserInteractionForAudio(false)
+                      }}
+                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg"
+                    >
+                      <Volume2 className="w-4 h-4" />
+                      Ativar Áudio e Vídeo Agora
+                    </button>
+                  </div>
+                )}
+
+                {isDemoMode && !hasRemoteStream && (
+                  <div className="flex flex-col items-center justify-center text-center p-3 text-slate-400">
+                    <div
+                      className={`rounded-full bg-brand-purple/20 text-brand-purple flex items-center justify-center font-black border border-brand-purple/40 ${
+                        focusMode === 'VIDEO' ? 'h-16 w-16 text-2xl mb-2' : 'h-8 w-8 text-xs'
+                      }`}
+                    >
+                      LM
+                    </div>
+                    {focusMode === 'VIDEO' && (
+                      <>
+                        <p className="font-extrabold text-slate-200 text-sm">Prof. Lucas Mendes (Monitor)</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Ambiente de Demonstração</p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Card do Usuário Remoto */}
+                <div
+                  className={`absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md rounded-xl border border-slate-700/60 flex items-center gap-1.5 flex-wrap ${
+                    focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
+                  }`}
+                >
+                  <span className="font-bold text-slate-100 flex items-center gap-1">
+                    {isDemoMode ? 'Lucas Mendes (Monitor)' : isStudent ? 'Monitor' : 'Aluno'}
+                  </span>
+                  {!remoteIsAudioEnabled && isP2PConnected && (
+                    <span title="Microfone desligado">
+                      <MicOff className="w-3 h-3 text-rose-400" />
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Novo Quadro: Adicionado ABAIXO da câmera com a Tela Compartilhada do Parceiro */}
+              {isRemoteScreenSharing && (
+                <div
+                  className={`relative bg-slate-950 rounded-2xl overflow-hidden border border-indigo-500/50 shadow-2xl flex items-center justify-center transition-all ${
+                    focusMode === 'VIDEO' ? 'h-1/2 flex-1' : 'w-36 h-24 sm:w-44 sm:h-28'
+                  }`}
+                >
+                  <video
+                    ref={(el) => {
+                      remoteScreenVideoRef.current = el
+                      if (el) {
+                        el.muted = true
+                        if (remoteScreenStreamRef.current && el.srcObject !== remoteScreenStreamRef.current) {
+                          el.srcObject = remoteScreenStreamRef.current
+                        }
+                        if (peerConnectionRef.current) {
+                          attachRemoteReceiverTracksRef.current(peerConnectionRef.current)
+                        }
+                        el.play().catch(() => {})
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    muted
+                    onLoadedMetadata={(e) => {
+                      const v = e.target as HTMLVideoElement
+                      v.muted = true
+                      v.play().catch(() => {})
+                    }}
+                    className="w-full h-full object-contain bg-black"
+                  />
+
+                  <div
+                    className={`absolute bottom-2 left-2 bg-slate-950/85 backdrop-blur-md rounded-xl border border-indigo-500/40 flex items-center gap-2 ${
+                      focusMode === 'VIDEO' ? 'px-3.5 py-1.5 text-xs' : 'px-2 py-0.5 text-[10px]'
+                    }`}
+                  >
+                    <span className="font-bold text-indigo-300 flex items-center gap-1.5">
                       <span>🖥️</span>
                       <span>Tela de {isStudent ? 'Monitor' : 'Aluno'}</span>
-                    </>
-                  ) : isDemoMode ? (
-                    'Lucas Mendes (Monitor)'
-                  ) : isStudent ? (
-                    'Monitor'
-                  ) : (
-                    'Aluno'
-                  )}
-                </span>
-
-                {isRemoteScreenSharing && remoteHasScreenAudio && (
-                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 text-[10px] font-bold flex items-center gap-1">
-                    🔊 Áudio da Tela Ativo
-                  </span>
-                )}
-              </div>
+                    </span>
+                    {remoteHasScreenAudio && (
+                      <span className="px-1.5 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 text-[10px] font-bold">
+                        🔊 Áudio da Tela Ativo
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Botão para Focar no Vídeo quando minimizado */}
@@ -1443,7 +2254,16 @@ export function VirtualRoom({
 
         {/* Toggle Speaker */}
         <button
-          onClick={() => setIsSpeakerMuted(!isSpeakerMuted)}
+          onClick={() => {
+            const next = !isSpeakerMuted
+            setIsSpeakerMuted(next)
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.muted = next
+              if (!next) {
+                remoteVideoRef.current.play().catch(() => {})
+              }
+            }
+          }}
           className={`p-3.5 rounded-2xl transition-all ${
             isSpeakerMuted
               ? 'bg-amber-600 text-white'
@@ -1498,7 +2318,7 @@ export function VirtualRoom({
                     >
                       <CheckCircle2 className="w-6 h-6 mx-auto mb-1 text-emerald-400" />
                       <span className="block font-black text-sm">Sim, sanada!</span>
-                      <span className="text-[10px] opacity-75">Gravação descartada</span>
+                      <span className="text-[10px] opacity-75">Liberar monitor</span>
                     </button>
 
                     <button
@@ -1512,7 +2332,7 @@ export function VirtualRoom({
                     >
                       <AlertTriangle className="w-6 h-6 mx-auto mb-1 text-rose-400" />
                       <span className="block font-black text-sm">Não foi sanada</span>
-                      <span className="text-[10px] opacity-75">Gravação salva p/ auditoria</span>
+                      <span className="text-[10px] opacity-75">Contestar atendimento</span>
                     </button>
                   </div>
                 </div>
@@ -1555,13 +2375,13 @@ export function VirtualRoom({
                   </div>
                 )}
 
-                {/* Se Dúvida NÃO Foi Sanada: Descrição e Gravação Salva */}
+                {/* Se Dúvida NÃO Foi Sanada: Descrição da Contestação */}
                 {doubtResolved === false && (
                   <div className="space-y-3 p-4 rounded-2xl bg-rose-950/40 border border-rose-900/60 animate-in fade-in duration-200">
                     <div className="flex items-start gap-2 text-rose-300 text-xs">
                       <ShieldCheck className="w-5 h-5 shrink-0 mt-0.5 text-rose-400" />
                       <p>
-                        A gravação da chamada será anexada e salva para análise pela equipe de ouvidoria do Hintlink. O pagamento ao monitor permanecerá congelado.
+                        Seu relato será enviado diretamente para a administração do Hintlink analisar o chamado. O pagamento ao monitor permanecerá congelado.
                       </p>
                     </div>
 
@@ -1572,7 +2392,7 @@ export function VirtualRoom({
                       rows={3}
                       value={disputeReason}
                       onChange={(e) => setDisputeReason(e.target.value)}
-                      placeholder="Ex: O monitor não sabia resolver os exercícios propostos de derivada..."
+                      placeholder="Ex: O monitor não compareceu ou não soube esclarecer a dúvida..."
                       className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-rose-800/80 text-xs text-white focus:outline-none focus:border-rose-500"
                     />
                   </div>
@@ -1609,7 +2429,7 @@ export function VirtualRoom({
                       className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black shadow-lg shadow-rose-900/40 flex items-center gap-2"
                     >
                       {isSubmittingFinish && <RefreshCw className="w-4 h-4 animate-spin" />}
-                      <span>Salvar Gravação & Enviar p/ Análise</span>
+                      <span>Enviar Contestação p/ Análise</span>
                     </button>
                   )}
                 </div>

@@ -27,6 +27,7 @@ interface OpenRequest {
   description?: string
   durationMinutes: number
   offeredPrice: string
+  matchQueue?: string
   createdAt: string
   student: {
     id: string
@@ -115,8 +116,8 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
   const loadData = useCallback(async () => {
     try {
       const [reqRes, mySubRes, activeRes] = await Promise.all([
-        api.get('/requests/open'),
-        api.get('/tutors/subjects'),
+        api.get('/requests/open').catch(() => ({ data: { requests: [] } })),
+        api.get('/tutors/subjects').catch(() => ({ data: { records: [] } })),
         api.get('/sessions/active').catch(() => ({ data: { session: null } })),
       ])
       setOpenRequests(reqRes.data.requests || [])
@@ -147,6 +148,18 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
       const payload = msg.payload as { requestId?: string } | undefined
       if (msg.type === 'REQUEST_TAKEN' && payload?.requestId) {
         setOpenRequests((prev) => prev.filter((r) => r.id !== payload.requestId))
+      }
+
+      // O aluno optou por recusar este monitor e buscar outro
+      if (msg.type === 'TUTOR_REJECTED_BY_STUDENT') {
+        loadData()
+        setIsChatModalOpen(false)
+        setIsVirtualRoomOpen(false)
+        setActiveSession(null)
+        setFeedback({
+          type: 'error',
+          message: 'O aluno optou por buscar outro monitor para este chamado. Você está liberado para atender outras dúvidas.',
+        })
       }
 
       // Sessão concluída
@@ -252,6 +265,12 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
       setLoadingAction(null)
     }
   }
+
+  const handleCloseVirtualRoom = useCallback(() => {
+    setIsVirtualRoomOpen(false)
+    setIsDemoRoomOpen(false)
+    loadData()
+  }, [loadData])
 
   return (
     <div className="space-y-8">
@@ -363,13 +382,22 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
                 className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:border-brand-yellow/60 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-5"
               >
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-brand-blue text-white">
                       {req.subject.code}
                     </span>
                     <span className="text-xs text-slate-600 font-medium">
                       {req.subject.name}
                     </span>
+                    {req.matchQueue === 'NOVEL' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                        🌱 Fila de Novos Monitores
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold">
+                        ⭐ Fila Normal (Top Avaliações)
+                      </span>
+                    )}
                   </div>
                   <h4 className="font-black text-lg text-brand-dark">{req.topic}</h4>
                   {req.description && (
@@ -503,11 +531,7 @@ export function TutorDashboard({ user }: { user: TutorUser }) {
           isDemoMode={isDemoRoomOpen}
           sendMessage={sendMessage}
           subscribe={subscribe}
-          onClose={() => {
-            setIsVirtualRoomOpen(false)
-            setIsDemoRoomOpen(false)
-            loadData()
-          }}
+          onClose={handleCloseVirtualRoom}
         />
       )}
     </div>

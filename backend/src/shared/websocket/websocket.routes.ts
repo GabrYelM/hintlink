@@ -1,9 +1,34 @@
 import { FastifyInstance } from 'fastify'
+import os from 'node:os'
 import { connectionManager } from '../../shared/websocket/connection-manager.js'
 import { prisma } from '../../shared/database/prisma.js'
 
+function getHostLanIp(): string {
+  const nets = os.networkInterfaces()
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (
+        net.family === 'IPv4' &&
+        !net.internal &&
+        !net.address.startsWith('169.254.') &&
+        !net.address.startsWith('172.')
+      ) {
+        return net.address
+      }
+    }
+  }
+  return '192.168.0.157'
+}
+
 export async function websocketRoutes(app: FastifyInstance) {
+  const hostLanIp = getHostLanIp()
+
   app.get('/ws', { websocket: true }, (socket, req) => {
+    // Determina o IP real de rede do cliente para resolver mDNS (.local) do WebRTC na LAN
+    const rawClientIp = (req.socket.remoteAddress || '').replace(/^.*:/, '')
+    const clientLanIp =
+      !rawClientIp || rawClientIp === '1' || rawClientIp === '127.0.0.1' ? hostLanIp : rawClientIp
+
     // Permite autenticação via query param no handshake do WebSocket: /ws?token=JWT_AQUI
     const { token } = req.query as { token?: string }
 
@@ -41,6 +66,7 @@ export async function websocketRoutes(app: FastifyInstance) {
         try {
           const parsed = JSON.parse(message.toString())
           const { type, sessionId, payload } = parsed
+          console.log(`[WS-RECV] ${role} (${userId.slice(0, 8)}) -> ${type} | session: ${sessionId}`)
 
           // Tratamento de ping / keep-alive
           if (type === 'PING') {
@@ -125,18 +151,69 @@ export async function websocketRoutes(app: FastifyInstance) {
             return
           }
 
-          // WebRTC Signaling: Offer, Answer, ICE Candidates
+          // Solicitação de renegociação / offer sob demanda
+          if (type === 'REQUEST_OFFER' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'REQUEST_OFFER', { requestedBy: userId }, socket)
+            return
+          }
+
+          // WebRTC Signaling: Offer, Answer, ICE Candidates com resolução de mDNS (.local) para LAN
           if (
             (type === 'RTC_OFFER' || type === 'RTC_ANSWER' || type === 'RTC_ICE_CANDIDATE') &&
             sessionId
           ) {
-            connectionManager.sendToRoom(sessionId, type, payload, socket)
+            let processedPayload = payload
+
+            if (type === 'RTC_ICE_CANDIDATE' && payload && typeof payload === 'object') {
+              const candStr = (payload as any).candidate
+              if (typeof candStr === 'string') {
+                let resolved = candStr
+                if (resolved.includes('.local')) {
+                  resolved = resolved.replace(/[a-zA-Z0-9-]+\.local/g, clientLanIp)
+                }
+                if (resolved.includes(' 127.0.0.1 ')) {
+                  resolved = resolved.replace(/ 127\.0\.0\.1 /g, ` ${clientLanIp} `)
+                }
+                processedPayload = {
+                  ...payload,
+                  candidate: resolved,
+                  _originalCandidate: candStr,
+                }
+              }
+            } else if (
+              (type === 'RTC_OFFER' || type === 'RTC_ANSWER') &&
+              payload &&
+              typeof payload === 'object'
+            ) {
+              const sdpStr = (payload as any).sdp
+              if (typeof sdpStr === 'string') {
+                let resolvedSdp = sdpStr
+                if (resolvedSdp.includes('.local')) {
+                  resolvedSdp = resolvedSdp.replace(/[a-zA-Z0-9-]+\.local/g, clientLanIp)
+                }
+                if (resolvedSdp.includes(' 127.0.0.1 ')) {
+                  resolvedSdp = resolvedSdp.replace(/ 127\.0\.0\.1 /g, ` ${clientLanIp} `)
+                }
+                processedPayload = {
+                  ...payload,
+                  sdp: resolvedSdp,
+                }
+              }
+            }
+
+            connectionManager.sendToRoom(sessionId, type, processedPayload, socket)
             return
           }
 
           // Chamada iniciada (notifica o outro participante no chat de agendamento)
           if (type === 'CALL_STARTED' && sessionId) {
             connectionManager.sendToRoom(sessionId, 'CALL_STARTED', { startedBy: userId }, socket)
+            return
+          }
+
+          // Notificação de Mudança de Estado de Mídia (Câmera / Microfone)
+          if (type === 'ROOM_MEDIA_STATE_CHANGED' && sessionId) {
+            connectionManager.sendToRoom(sessionId, 'ROOM_MEDIA_STATE_CHANGED', payload, socket)
             return
           }
 

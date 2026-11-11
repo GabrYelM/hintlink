@@ -46,7 +46,9 @@ class ConnectionManager {
   joinRoom(sessionId: string, userId: string, role: 'STUDENT' | 'TUTOR' | 'ADMIN', socket: WebSocket) {
     const current = this.rooms.get(sessionId) || []
     const filtered = current.filter((p) => p.socket !== socket)
-    this.rooms.set(sessionId, [...filtered, { userId, role, socket }])
+    const updated = [...filtered, { userId, role, socket }]
+    this.rooms.set(sessionId, updated)
+    console.log(`[WS-ROOM] ${role} (${userId.slice(0, 8)}) entrou na sala: ${sessionId}. Total: ${updated.length}`)
   }
 
   leaveRoom(sessionId: string, socket: WebSocket) {
@@ -62,14 +64,20 @@ class ConnectionManager {
 
   sendToRoom(sessionId: string, type: string, payload: any, excludeSocket?: WebSocket) {
     const participants = this.rooms.get(sessionId)
-    if (!participants) return
+    if (!participants) {
+      console.log(`[WS-ROOM] sendToRoom (${type}): Ninguém na sala ${sessionId}`)
+      return
+    }
 
     const message = JSON.stringify({ type, sessionId, payload, timestamp: new Date().toISOString() })
+    let count = 0
     for (const p of participants) {
       if (p.socket !== excludeSocket && p.socket.readyState === WebSocket.OPEN) {
         p.socket.send(message)
+        count++
       }
     }
+    console.log(`[WS-ROOM] sendToRoom (${type}) em ${sessionId}: entregue para ${count} participante(s)`)
   }
 
   getRoomParticipants(sessionId: string) {
