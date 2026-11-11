@@ -129,6 +129,44 @@ describe('Sessions & Dispute - Unit Tests', () => {
       expect(result.ticket.status).toBe('OPEN')
     })
 
+    it('deve abrir disputa de dúvida não sanada apenas com relato textual (sem necessidade de gravação)', async () => {
+      mockSessionsRepo.findById.mockResolvedValue({
+        id: 'session-2',
+        studentId: 'student-2',
+        tutorId: 'tutor-2',
+        status: 'ACTIVE',
+        escrow: { id: 'escrow-2', status: 'HELD' },
+        ticket: null,
+      })
+
+      const createdTicket = {
+        id: 'ticket-2',
+        sessionId: 'session-2',
+        openedByUserId: 'student-2',
+        reason: 'O monitor não compareceu.',
+        recordingUrl: null,
+        status: 'OPEN',
+      }
+
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        return callback({
+          tutoringSession: { update: vi.fn().mockResolvedValue({ id: 'session-2', status: 'DISPUTED' }) },
+          escrowTransaction: { update: vi.fn().mockResolvedValue({ id: 'escrow-2', status: 'HELD' }) },
+          disputeTicket: { create: vi.fn().mockResolvedValue(createdTicket) },
+        })
+      })
+
+      const service = new OpenDisputeService(mockSessionsRepo)
+      const result = await service.execute({
+        sessionId: 'session-2',
+        userId: 'student-2',
+        reason: 'O monitor não compareceu.',
+      })
+
+      expect(result.ticket).toBeDefined()
+      expect(result.ticket.status).toBe('OPEN')
+    })
+
     it('não deve permitir que o monitor ou terceiro abra disputa de dúvida não sanada', async () => {
       mockSessionsRepo.findById.mockResolvedValue({
         id: 'session-2',

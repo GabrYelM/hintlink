@@ -1,0 +1,356 @@
+CAPITULO 4: DOCUMENTACAO TECNICA (DEVS) - O CORACAO DA ENTREGA
+
+Projeto: Hintlink - Plataforma Universitaria de Monitoria Sob Demanda
+Contexto: Universidade Federal do ABC (UFABC)
+Repositorio Oficial: https://github.com/GabrYelM/hintlink
+Estagio do Prototipo: 92% Concluido (MVP Totalmente Funcional)
+
+
+4. DOCUMENTACAO TECNICA (DEVS)
+
+Este capitulo consolida toda a especificacao de engenharia, arquitetura de software, fluxo de funcionamento, procedimentos de reproducao, resultados de testes e diretrizes de seguranca do prototipo funcional da plataforma Hintlink.
+
+
+4.1 REQUISITOS: O QUE O PRODUTO DEVE FAZER E COM QUAIS LIMITES
+
+4.1.1 Requisitos Funcionais (O que o produto faz):
+
+RF01 - Autenticacao e Cadastro Aberto a Qualquer E-mail:
+O sistema realiza cadastro e login seguro de usuarios aceitando qualquer formato de e-mail valido (provedores comerciais como Gmail, Hotmail, Outlook ou institucionais) com validacao obrigatoria de CPF. As credenciais utilizam hash Bcrypt e sessoes gerenciadas via JSON Web Tokens (JWT).
+
+RF02 - Alternancia Dinamica de Perfil (Role Switching):
+A aplicacao permite que o mesmo usuario alterne instantaneamente entre os papeis de Aluno (que solicita monitoria) e Monitor (que atende chamados) com apenas um clique na interface, sem necessidade de logout ou criacao de contas adicionais.
+
+RF03 - Validacao Automatizada de Historico Escolar (SIGAA):
+O sistema possui motor leitor de documentos em formato PDF emitidos pelo SIGAA da UFABC. O algoritmo extrai automaticamente os dados do aluno, curso, materias cursadas e conceitos obtidos (A, B, C, D). Apenas disciplinas com aprovacao comprovada (conceitos A, B ou C) sao liberadas para que o monitor possa lecionar.
+
+RF04 - Cobranca Tabelada por Tempo (R$ 30,00/hora) e Matchmaking Inteligente (Divisao 50/50):
+O aluno nao define o preco da aula; o sistema calcula e fixa a cobranca automaticamente a taxa de R$ 30,00 por hora (R$ 0,50 por minuto), com valor proporcional para qualquer duracao (15 min = R$ 7,50; 30 min = R$ 15,00; 45 min = R$ 22,50; 60 min = R$ 30,00). As solicitacoes sao distribuidas de forma equitativa: 50% para a fila normal (ordenada por avaliacao) e 50% para a fila de novos monitores (< 5 monitorias), com fallback automatico caso uma fila esteja vazia.
+
+RF05 - Notificacao do Monitor, Chat Pre-Chamada e Opcao de Recusa pelo Aluno:
+Ao ser aceito por um monitor, o aluno recebe uma notificacao em tempo real contendo o perfil completo do monitor (nota media, total de avaliacoes e quantidade de monitorias realizadas). O aluno possui a prerrogativa de aceitar o monitor para iniciar o chat/chamada ou recusar o monitor, fazendo com que o chamado seja reaberto e o matchmaking busque outro monitor disponivel.
+
+RF06 - Sala Virtual com Transmissao P2P (WebRTC):
+A comunicacao de audio e video ocorre de forma direta entre os navegadores dos dois participantes, proporcionando baixa latencia e alta fidelidade de comunicacao.
+
+RF07 - Compartilhamento de Tela Estilo Discord com Audio Mixado:
+Permite a transmissao de tela inteira, janela de aplicativo especifica (como VS Code, terminal ou leitores de PDF) ou guia do navegador. O sistema utiliza a Web Audio API para combinar a voz do microfone com o som interno da janela transmitida, enviando ambos simultaneamente para o receptor.
+
+RF08 - Quadro Branco Colaborativo com Foco Dinamico:
+Lousa digital com sincronizacao de desenhos em tempo real via WebSockets. Permite que os usuarios alternem o foco da tela entre as cameras e a lousa livremente, mantendo ambos os fluxos ativos em segundo plano sem perda de conexao de audio ou video.
+
+RF09 - Chat Integrado a Sala de Video:
+Canal de texto síncrono interno a chamada de video, permitindo compartilhamento de links, exercicios e codigos sem necessidade de interromper a fala.
+
+RF10 - Encerramento e Avaliacao Exclusiva do Aluno (com Contestacao Direta):
+O encerramento da monitoria e a avaliacao de qualidade (nota de 1 a 5 estrelas) sao acionados exclusivamente pelo aluno. Ao confirmar que a duvida foi sanada, a sala fecha para o monitor e o Pix e liberado. Caso a duvida nao tenha sido sanada, o aluno registra o relato diretamente para analise da ouvidoria e o repasse e congelado, sem necessidade de gravacao pesada de video, preservando a privacidade e a leveza da conexao.
+
+RF11 - Empacotamento e Execucao Portatil (Zero Dependencias):
+O sistema conta com rotinas de inicializacao autonoma em lote para ambiente Windows, operando com versoes portateis do Node.js e do PostgreSQL, sem exigir permissoes de administrador ou instalacoes manuais previas na maquina.
+
+
+4.1.2 Limites do Sistema e Requisitos Nao Funcionais (Com quais limites opera):
+
+RNF01 - Topologia de Video Ponto a Ponto (1:1):
+O prototipo foi dimensionado para conexao direta entre dois participantes (um aluno e um monitor). Nao contempla salas de videoconferencia para multiplos alunos simultaneos sem a presenca de um servidor de midia (SFU/MCU).
+
+RNF02 - Dependencia de Servidores STUN/TURN para Travessia de NAT:
+O estabelecimento da chamada depende de servidores STUN publicos. Em redes corporativas ou universitarias sob NAT simetrico rigoroso com bloqueio de portas UDP, a conexao direta pode requerer servidor TURN dedicado ou configuracao de rede virtual mesh (exemplo: Tailscale).
+
+RNF03 - Especificidade do Formato do Historico:
+O leitor de historico foi estruturado sobre a diagramacao oficial emitida pelo sistema SIGAA da UFABC. Extratos emitidos por outras instituicoes demandam adaptacoes no algoritmo de extracao.
+
+RNF04 - Restricoes de Captura de Som do Sistema:
+A capacidade de isolar e capturar o audio de uma janela de aplicativo depende do suporte oferecido pelo sistema operacional e pelo navegador (suportado nativamente em navegadores baseados em Chromium no Windows e Linux; o macOS restringe essa captura a telas inteiras ou guias).
+
+RNF05 - Latencia e Desempenho Operacional:
+A sincronizacao de dados via WebSockets (chat e lousa) opera com latencia inferior a 100 milissegundos em rede local e inferior a 250 milissegundos em conexoes convencionais de banda larga.
+
+
+4.2 ARQUITETURA: DIAGRAMA DE BLOCOS E FUNCIONAMENTO
+
+4.2.1 Estrutura da Arquitetura em Camadas:
+
+A arquitetura do Hintlink e organizada em cinco camadas interdependentes:
+
+Camada 1: Apresentacao e Clientes Web (Aluno e Monitor)
+Desenvolvida em Next.js 14, React 18 e Tailwind CSS. Executa no navegador dos usuarios, processando a interface responsiva, capturando midias (camera, microfone e compartilhamento de tela), mixando trilhas sonoras via Web Audio API e renderizando a lousa interativa sobre HTML5 Canvas.
+
+Camada 2: Transporte de Midia Ponto a Ponto (WebRTC)
+Canal direto estabelecido entre o navegador do aluno e o do monitor. Transmite pacotes de video, voz e tela criptografados por protocolos nativos (SRTP e DTLS), sem que o trafego de audio e video sobrecarregue o servidor central.
+
+Camada 3: Servicos, Regras de Negocio e Sinalizacao (Fastify Backend)
+Servidor Node.js em TypeScript rodando na porta 3333. Fornece rotas REST para autenticacao, cadastro, administracao de chamados e upload de documentos. Atua tambem como hub WebSockets para troca de mensagens de sinalizacao WebRTC (ofertas SDP e candidatos ICE), chat e eventos de sincronismo de lousa.
+
+Camada 4: Persistencia Relacional (PostgreSQL e Prisma ORM)
+Banco de dados relacional operando na porta 5432. Armazena informacoes de usuarios, materias, vinculos de monitores habilitados, chamados, mensagens trocadas e avaliacoes de atendimento. O acesso e estruturado pelo Prisma ORM com consultas tipadas e seguras.
+
+Camada 5: Orquestracao e Isolamento Operacional (Windows Job Objects)
+Camada de supervisao de processos executada no sistema operacional Windows. Vincula o backend e o banco de dados a um objeto de gerenciamento unico, assegurando que o encerramento da aplicacao elimine todos os processos filhos sem deixar servicos em segundo plano.
+
+
+4.2.2 Descricao do Funcionamento Integrado:
+
+1. Sinalizacao e Handshake WebRTC:
+Os clientes conectam-se ao servidor Fastify por meio de WebSockets. Durante o inicio do atendimento, o servidor atua como roteador de sinalizacao, transmitindo a oferta de sessao (SDP Offer), a resposta (SDP Answer) e os candidatos de rota (ICE Candidates). Concluida essa negociacao, os fluxos de camera, microfone e tela trafegam exclusivamente ponto a ponto.
+
+2. Mixagem de Som de Tela e Voz (Web Audio API):
+Ao compartilhar uma janela com audio, o navegador do monitor inicializa uma instancia de AudioContext. O fluxo sonoro do microfone e o fluxo sonoro da janela do aplicativo sao conectados como fontes em um no de destino de midia (MediaStreamAudioDestinationNode). A faixa resultante, contendo ambos os sons balanceados, e anexada a conexao WebRTC e transmitida ao aluno.
+
+3. Sincronizacao da Lousa Virtual:
+Os comandos de traco do elemento Canvas (coordenadas cartesianas, cores, espessura e acoes de borracha e limpeza) sao formatados em mensagens JSON e emitidos via WebSockets. O navegador parceiro recebe os dados e reproduz os tracos de forma instantanea.
+
+4. Gerenciamento Limpo de Processos no Windows:
+O inicializador portatil cria um Windows Job Object via chamada de sistema (P-Invoke) configurado com a diretiva de encerramento automatico de subprocessos. Ao fechar a janela do terminal, o Windows finaliza imediatamente as instancias ativas de Node.js e PostgreSQL, liberando as portas 3000, 3333 e 5432.
+
+
+4.3 COMPONENTES E MATERIAIS, COM QUANTIDADES
+
+A relacao de componentes materiais e softwares utilizados no desenvolvimento e execucao do prototipo e apresentada a seguir:
+
+Item 01: Computador Servidor / Host
+Categoria: Hardware
+Quantidade: 1 unidade
+Descricao: Computador ou notebook com sistema Windows 10 ou 11 x64, minimo de 4 GB de memoria RAM e 500 MB de espaco livre em disco.
+
+Item 02: Dispositivos Clientes
+Categoria: Hardware
+Quantidade: 2 unidades
+Descricao: Computadores ou notebooks dotados de navegadores web atualizados (Google Chrome, Microsoft Edge, Mozilla Firefox ou Brave).
+
+Item 03: Perifericos de Audio
+Categoria: Hardware
+Quantidade: 2 unidades
+Descricao: Microfones ou headsets para comunicacao vocal durante os testes de atendimento.
+
+Item 04: Perifericos de Video
+Categoria: Hardware
+Quantidade: 2 unidades
+Descricao: Cameras web integradas ou perifericos USB compativeis com resolucao minima de 720p.
+
+Item 05: Equipamento de Conectividade
+Categoria: Hardware
+Quantidade: 1 unidade
+Descricao: Roteador Wi-Fi ou switch Ethernet para interconexao de rede local entre as maquinas.
+
+Item 06: Frontend da Aplicacao
+Categoria: Software
+Quantidade: 1 framework
+Descricao: Next.js versao 14 estruturado com React 18 e modelo App Router.
+
+Item 07: Sistema de Estilizacao
+Categoria: Software
+Quantidade: 1 biblioteca
+Descricao: Tailwind CSS versao 3 para definicao de layout responsivo e coeso.
+
+Item 08: Pacote de Icones
+Categoria: Software
+Quantidade: 1 biblioteca
+Descricao: Lucide-React versao 0.344 ou superior.
+
+Item 09: Cliente de Comunicacao HTTP
+Categoria: Software
+Quantidade: 1 biblioteca
+Descricao: Axios versao 1.7 com interceptores para resolucao dinamica de IP de rede.
+
+Item 10: Servidor Backend e API
+Categoria: Software
+Quantidade: 1 servidor
+Descricao: Fastify versao 4 em ambiente Node.js LTS versao 20.
+
+Item 11: Modulo de Comunicacao em Tempo Real
+Categoria: Software
+Quantidade: 1 biblioteca
+Descricao: @fastify/websocket versao 8 para troca sincrona de mensagens e sinalizacao.
+
+Item 12: Mapeador Objeto-Relacional (ORM)
+Categoria: Software
+Quantidade: 1 framework
+Descricao: Prisma ORM versao 5 para modelagem, tipagem e migracoes de banco de dados.
+
+Item 13: Motor de Leitura de Documentos
+Categoria: Software
+Quantidade: 1 biblioteca
+Descricao: pdf-parse versao 1.1 para extracao textual e analise dos arquivos de historico escolar.
+
+Item 14: Criptografia e Seguranca
+Categoria: Software
+Quantidade: 2 bibliotecas
+Descricao: bcryptjs versao 2.4 (hash de senhas) e jsonwebtoken versao 9 (emissao de tokens JWT).
+
+Item 15: Sistema Gerenciador de Banco de Dados
+Categoria: Software
+Quantidade: 1 instancia
+Descricao: PostgreSQL versoes 15 ou 16 (executado de forma portatil ou via container).
+
+Item 16: Scripts de Orquestracao Autonoma
+Categoria: Software
+Quantidade: 4 rotinas
+Descricao: Scripts executaveis (.bat e .ps1) para instalacao, inicializacao, encerramento e geracao de pacote offline.
+
+
+4.4 ESQUEMAS, DESENHOS, FLUXOGRAMA OU CODIGO
+
+4.4.1 Repositorio do Codigo-Fonte:
+Endereco do Repositorio: https://github.com/GabrYelM/hintlink
+Branch de Entrega: main
+Licenciamento: Software 100% de codigo aberto (Open Source)
+
+4.4.2 Fluxograma Sequencial do Ciclo de Atendimento:
+
+Etapa 1: Abertura da Solicitacao pelo Aluno
+O estudante acessa o painel, escolhe a disciplina desejada, descreve a duvida teorica ou pratica e informa o valor proposto.
+
+Etapa 2: Propagacao via WebSocket
+O servidor backend recebe a requisicao e emite uma notificacao síncrona aos navegadores dos monitores homologados naquela materia.
+
+Etapa 3: Aceite pelo Monitor
+O monitor visualiza os dados do chamado em seu feed em tempo real e confirma o atendimento.
+
+Etapa 4: Chat Pre-Chamada e Agendamento
+Abre-se uma conversa de texto em tempo real entre aluno e monitor para esclarecimento previo, envio de exercicios e definicao de dia e horario para a monitoria.
+
+Etapa 5: Acesso a Sala Virtual e Negociacao WebRTC
+No horario acertado, ambos clicam no botao de inicio. O servidor de sinalizacao realiza a troca de ofertas e respostas SDP e candidatos ICE, estabelecendo a conexao de video e audio de baixa latencia.
+
+Etapa 6: Sessao de Monitoria Ativa
+Durante a chamada, aluno e monitor utilizam simultaneamente a transmissao de video, a lousa interativa compartilhada, o chat de apoio e o compartilhamento de tela com captura de som do aplicativo.
+
+Etapa 7: Encerramento e Avaliacao pelo Aluno
+Ao concluir, o aluno avalia a sessao atribuindo nota de 1 a 5 estrelas e feedback. O evento e propagado ao servidor, que encerra automaticamente a sala virtual para o monitor e atualiza o historico de atendimentos.
+
+
+4.4.3 Estrutura de Diretorios do Repositorio:
+
+hintlink/
+- backend/
+  - prisma/ (esquema relacional e dados iniciais de seed)
+  - src/ (controladores, rotas de api, parser de pdf e hub websocket)
+- frontend/
+  - src/app/ (paginas de login, dashboard de aluno e monitor, e sala virtual)
+  - src/components/ (componentes visuais, lousa interativa e controles de chamada)
+  - src/hooks/ (ganchos useWebRTC e useHintlinkSocket)
+  - src/services/ (configuracao de api axios e interceptores de rede)
+- scripts/ (rotinas powershell de inicializacao e vinculacao a job objects)
+- INSTALAR-HINTLINK.bat (instalador autonomo de um clique para windows)
+- INICIAR-HINTLINK.bat (inicializador unificado de todos os servicos)
+- PARAR-HINTLINK.bat (rotina de encerramento limpo de portas e servicos)
+- GERAR-PACOTE-PORTATIL.bat (empacotador para distribuicao offline em pendrive)
+
+
+4.5 COMO MONTAR OU REPRODUZIR O PROTOTIPO
+
+O sistema disponibiliza tres metodos de montagem e execucao:
+
+4.5.1 Metodo 1: Instalacao Portatil de Um Clique (Zero Dependencias no Windows):
+Recomendado para apresentacoes em computadores da universidade sem privilegios de administrador.
+1. Baixar o repositorio como arquivo ZIP no GitHub e descompactar na maquina.
+2. Clicar duas vezes sobre o arquivo: INSTALAR-HINTLINK.bat.
+O instalador baixa o Node.js LTS e o PostgreSQL portateis na pasta bin, inicializa os arquivos do banco de dados na pasta data, executa as migracoes estruturais do Prisma, cadastra as materias da UFABC e contas de teste, e cria um atalho funcional na Area de Trabalho.
+3. Clicar duas vezes sobre o arquivo: INICIAR-HINTLINK.bat.
+O orquestrador inicializa o banco, o backend e o frontend simultaneamente e abre automaticamente o navegador no endereco: http://localhost:3000.
+
+4.5.2 Metodo 2: Modo Desenvolvedor Tradicional:
+Para ambientes com Node.js e PostgreSQL ja configurados:
+1. Clonar o repositorio via terminal: git clone https://github.com/GabrYelM/hintlink.git
+2. Instalar os modulos necessarios:
+npm install --prefix backend
+npm install --prefix frontend
+3. Executar as migracoes e pre-povoamento do banco:
+cd backend
+npx prisma db push
+npx prisma db seed
+4. Inicializar os servidores em terminais separados:
+npm run dev --prefix backend (executa na porta 3333)
+npm run dev --prefix frontend (executa na porta 3000)
+
+4.5.3 Metodo 3: Execucao a Partir de Pendrive (100% Offline):
+1. Em um computador com conexao a internet, executar o arquivo: GERAR-PACOTE-PORTATIL.bat.
+2. Copiar a pasta gerada (dist-portable/Hintlink) para uma unidade USB.
+3. Conectar a unidade em qualquer computador com Windows e executar INICIAR-HINTLINK.bat diretamente da unidade, sem necessidade de internet ou instalacao.
+
+4.5.4 Contas Pre-Cadastradas para Avaliacao Imediata:
+- Conta de Monitor Habilitado (com aprovacoes em Calculo 1, Fisica 1 e AEDS):
+Login: monitor@aluno.ufabc.edu.br
+Senha: 123456
+
+- Conta de Aluno Solicitante:
+Login: aluno@aluno.ufabc.edu.br
+Senha: 123456
+
+- Contas Adicionais para Teste de Concorrencia:
+Login: gabryel.m@aluno.ufabc.edu.br | Senha: 123456
+Login: rafa@aluno.ufabc.edu.br | Senha: 123456
+
+
+4.6 TESTES FEITOS E RESULTADOS
+
+4.6.1 Testes Automatizados (Suite Vitest no Backend):
+Total de testes executados: 21
+Testes aprovados: 21 (100% de sucesso)
+
+Itens validados pelos testes automatizados:
+1. Cadastro aberto com qualquer e-mail: Confirmacao de registro com contas Gmail, Hotmail, Outlook, dominios corporativos e institucionais.
+2. Cobranca por tempo da aula (R$ 30,00/hora): Validacao exata da taxa de R$ 0,50/minuto para 15 min (R$ 7,50), 30 min (R$ 15,00), 45 min (R$ 22,50), 60 min (R$ 30,00) e duracoes excedentes (90 min = R$ 45,00), com rejeicao de duracoes inferiores a 15 minutos.
+3. Matchmaking inteligente 50/50: Classificacao de monitores novos (< 5 monitorias) versus normais, distribuicao equitativa entre as filas e ordenacao decrescente por nota (rating) e reviews.
+4. Fallback automatico de fila: Redirecionamento transparente quando uma das filas (novatos ou normais) nao possui monitores disponiveis no momento.
+5. Aceite e sumario do monitor: Geracao da sessao com dados do monitor (nota, total de avaliacoes e status de novo monitor) para exibicao ao aluno.
+6. Recusa do monitor pelo aluno: Bloqueio de monitores previamente recusados, reabertura do chamado no estado OPEN e remocao da sessao/custodia temporaria.
+7. Contestacao e ouvidoria direta: Abertura de ticket de duvida nao sanada apenas com relato textual da ocorrencia (sem necessidade de gravacao em video).
+8. Seguranca e autorizacao: Bloqueio de recusa por usuarios terceiros e prevencao de aceite por monitores sem materia aprovada no historico escolar.
+9. Leitura do extrato do SIGAA: Processamento de extrato oficial em PDF com validacao de conceitos A, B e C e rejeicao de reprovacoes.
+10. Sessoes e Avaliacao: Atualizacao da nota media ponderada do monitor e liberacao de custodia Pix.
+
+4.6.2 Testes Funcionais e de Sistema (Cenarios Reais):
+1. Teste de Operacao em Rede Local:
+O sistema foi executado em uma maquina principal e acessado simultaneamente por outro notebook e por um smartphone conectados a mesma rede Wi-Fi via endereco IP local. A navegacao, login e comunicacao com a API transcorreram sem falhas de politicas de CORS.
+
+2. Teste de Chamada de Video WebRTC:
+Duas maquinas fisicas distintas estabeleceram sessao de video. A troca de mensagens de sinalizacao e resolucao de candidatos ICE ocorreu em 1,2 segundos, mantendo fluxo audiovisual continuo e sem descompasso perceptivel de audio.
+
+3. Teste de Compartilhamento de Tela com Audio do Sistema:
+O monitor compartilhou uma janela de edicao de codigo e reproduziu conteudo multimidia com som simultaneamente ao uso do microfone. O aluno receptor confirmou a audicao nitida tanto da voz quanto do audio do aplicativo, comprovando o correto funcionamento da Web Audio API.
+
+4. Teste de Lousa Sincronizada e Foco Dinamico:
+Ambos os participantes realizaram anotacoes graficas conjuntas enquanto alternavam o foco visual entre a lousa e as cameras. Os tracos permaneceram preservados e nao ocorreu reinicializacao das faixas de video ou audio.
+
+5. Teste de Resiliencia de Processos no Sistema Operacional:
+O terminal do iniciador portatil foi fechado abruptamente durante a operacao. O mecanismo de Windows Job Object encerrou no mesmo instante os processos do Node.js e do PostgreSQL, liberando integralmente as portas de rede sem gerar processos orfaos.
+
+
+4.7 ESTAGIO ATUAL DO PROTOTIPO (EM %), LIMITACOES E CUIDADOS DE SEGURANCA
+
+4.7.1 Estagio Geral de Desenvolvimento: 92% Concluido (MVP Operacional)
+
+A distribuicao percentual do desenvolvimento por modulo funcional e a seguinte:
+- Autenticacao Institucional e Alternancia de Papeis: 100% concluido.
+- Leitor Automatizado de Historico do SIGAA UFABC: 100% concluido.
+- Feed e Notificacao de Chamados em Tempo Real: 100% concluido.
+- Bate-Papo de Agendamento e Alinhamento Pre-Chamada: 100% concluido.
+- Sala Virtual WebRTC (Audio, Video e Mensagens): 100% concluido.
+- Compartilhamento de Tela com Mixagem de Audio: 100% concluido.
+- Quadro Branco Interativo com Foco Dinamico: 100% concluido.
+- Fluxo de Avaliacao Exclusivo do Aluno e Fechamento Sincronizado: 100% concluido.
+- Instalador e Iniciador Autonomo para Windows: 100% concluido.
+- Gateway Financeiro Pix: 40% concluido (logica de custodia modelada e persistida no banco; etapa futura contemplara conexao direta com webhooks de instituicao bancaria).
+
+4.7.2 Limitacoes Tecnicas Conhecidas:
+1. Conexoes 1:1: A solucao atual atende exclusivamente ao cenario individual de um aluno com um monitor. O atendimento simultaneo a multiplos estudantes em uma mesma sala requer a adocao futura de um servidor de midia seletiva (SFU).
+2. Compatibilidade de Extratos: O extrato aceito deve obedecer a estrutura emitida pelo portal SIGAA da UFABC.
+3. Restricoes de Redes com NAT Simetrico: Redes que bloqueiem portas UDP aleatorias exigem a presenca de servidor TURN auxiliar ou o uso de redes virtuais como Tailscale.
+
+4.7.3 Cuidados e Diretrizes de Seguranca Adotados:
+1. Armazenamento Seguro de Senhas:
+As senhas nao sao armazenadas em texto puro, utilizando o algoritmo bcryptjs com fator de custo (salt rounds) igual a 10.
+
+2. Protecao de Rotas e Sessoes:
+Todas as operacoes restritas exigem envio de cabecalho de autorizacao com token JWT valido, assinado por chave secreta e com tempo de expiracao delimitado.
+
+3. Tratamento de Dados Pessoais e Conformidade com a LGPD:
+Os arquivos PDF de historico escolar sao processados em memoria volatil (RAM) durante o upload. Nenhum documento academico do estudante permanece gravado permanentemente no disco rigido do servidor apos a extracao das materias.
+
+4. Criptografia Nativa de Midias:
+As transmissoes de video, voz e tela via WebRTC sao cifradas por padrao de ponta a ponta mediante protocolos DTLS e SRTP.
+
+5. Protecao Contra Injecao de SQL:
+Todas as comunicacoes com a base relacional sao realizadas pelo Prisma ORM, que implementa consultas tipadas e preparadas, neutralizando tentativas de manipulacao indevida de dados.
