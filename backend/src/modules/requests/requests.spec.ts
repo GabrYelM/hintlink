@@ -8,9 +8,13 @@ import {
   isNovelTutor,
   sortTutorsByRating,
   resetGlobalRequestSequence,
+  doesTutorFulfillStudentSchedule,
   TutorCandidate,
 } from './matchmaking.service.js'
-import { calculatePriceByDuration } from '../../shared/utils/pricing.js'
+import {
+  calculatePriceByDuration,
+  calculateDirectTutorPriceByDuration,
+} from '../../shared/utils/pricing.js'
 import { AppError } from '../../shared/errors/app-error.js'
 import { prisma } from '../../shared/database/prisma.js'
 
@@ -51,8 +55,15 @@ describe('Tutoring Requests - Unit Tests', () => {
       expect(calculatePriceByDuration(90)).toBe(45.0)
     })
 
-    it('deve rejeitar duração menor que 15 minutos na regra de preço', () => {
-      expect(() => calculatePriceByDuration(10)).toThrow('A duração mínima de monitoria é de 15 minutos.')
+    it('deve calcular o valor de aula direta pelo chat com acréscimo de +15% por hora (R$ 34,50/h)', () => {
+      // 60 min (1 hora): R$ 30,00 * 1.15 = R$ 34,50
+      expect(calculateDirectTutorPriceByDuration(60)).toBe(34.5)
+      // 30 min: R$ 15,00 * 1.15 = R$ 17,25
+      expect(calculateDirectTutorPriceByDuration(30)).toBe(17.25)
+    })
+
+    it('deve rejeitar duração menor que 1 minuto na regra de preço', () => {
+      expect(() => calculatePriceByDuration(0)).toThrow('A duração mínima de monitoria é de 1 minuto.')
     })
 
     it('o sistema deve calcular o preço automaticamente na criação do chamado sem input de preço do aluno', async () => {
@@ -85,7 +96,7 @@ describe('Tutoring Requests - Unit Tests', () => {
       )
     })
 
-    it('não deve permitir solicitação com duração menor que 15 minutos', async () => {
+    it('não deve permitir solicitação com duração menor que 1 minuto', async () => {
       mockUsersRepo.findById.mockResolvedValue({ id: 'student-1' })
       mockSubjectsRepo.findById.mockResolvedValue({ id: 'subj-1' })
 
@@ -96,9 +107,74 @@ describe('Tutoring Requests - Unit Tests', () => {
           studentId: 'student-1',
           subjectId: 'subj-1',
           topic: 'Dúvida Rápida',
-          durationMinutes: 10,
+          durationMinutes: 0,
         })
-      ).rejects.toThrow('A duração mínima de monitoria é de 15 minutos.')
+      ).rejects.toThrow('A duração mínima de monitoria é de 1 minuto.')
+    })
+
+    it('deve validar compatibilidade de horários independentes entre aluno e monitor', () => {
+      const studentSlots = [
+        { day: 'Segunda-feira', startTime: '14:00', endTime: '19:00' },
+        { day: 'Terça-feira', startTime: '12:00', endTime: '20:00' },
+      ]
+
+      const matchingTutorSlots = [
+        { day: 'Terça-feira', startTime: '18:00', endTime: '21:00' }, // interseção 18:00-20:00 = 120 min
+      ]
+
+      const nonMatchingTutorSlots = [
+        { day: 'Quarta-feira', startTime: '14:00', endTime: '19:00' }, // dia diferente
+        { day: 'Segunda-feira', startTime: '08:00', endTime: '12:00' }, // horário sem interseção
+      ]
+
+      expect(doesTutorFulfillStudentSchedule(studentSlots, matchingTutorSlots, 60)).toBe(true)
+      expect(doesTutorFulfillStudentSchedule(studentSlots, nonMatchingTutorSlots, 30)).toBe(false)
+    })
+
+    it('deve bloquear abertura de chamado se o aluno possuir saldo de créditos insuficiente', async () => {
+      mockUsersRepo.findById.mockResolvedValue({ id: 'student-1', role: 'STUDENT', credits: 10.0 })
+      mockSubjectsRepo.findById.mockResolvedValue({ id: 'subj-1', code: 'BC0005', name: 'Bases Matemáticas' })
+
+      const service = new CreateTutoringRequestService(mockRequestsRepo, mockSubjectsRepo, mockUsersRepo)
+
+      await expect(
+        service.execute({
+          studentId: 'student-1',
+          subjectId: 'subj-1',
+          topic: 'Integrais por Partes',
+          durationMinutes: 30, // Custa 15.0 créditos
+        })
+      ).rejects.toThrow('Saldo de créditos insuficiente')
+    })
+
+    it('deve reter os créditos do aluno em custódia ao abrir o chamado quando houver saldo suficiente', async () => {
+      mockUsersRepo.findById.mockResolvedValue({ id: 'student-1', role: 'STUDENT', credits: 45.0 })
+      mockUsersRepo.deductCreditsForEscrow = vi.fn().mockResolvedValue({
+        user: { id: 'student-1', credits: 30.0 },
+        transaction: { id: 'tx-1', amount: -15.0 },
+      })
+      mockSubjectsRepo.findById.mockResolvedValue({ id: 'subj-1', code: 'BC0005', name: 'Bases Matemáticas' })
+      mockRequestsRepo.create.mockImplementation(async (data: any) => ({
+        id: 'req-credit-1',
+        ...data,
+      }))
+
+      const service = new CreateTutoringRequestService(mockRequestsRepo, mockSubjectsRepo, mockUsersRepo)
+
+      const result = await service.execute({
+        studentId: 'student-1',
+        subjectId: 'subj-1',
+        topic: 'Integrais por Partes',
+        durationMinutes: 30,
+      })
+
+      expect(result.remainingCredits).toBe(30.0)
+      expect(mockUsersRepo.deductCreditsForEscrow).toHaveBeenCalledWith(
+        'student-1',
+        15.0,
+        expect.stringContaining('Retenção em custódia'),
+        'req-credit-1'
+      )
     })
   })
 

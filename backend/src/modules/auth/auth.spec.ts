@@ -81,4 +81,43 @@ describe('Auth & User Registration - Unit Tests', () => {
       })
     ).rejects.toThrow('CPF inválido.')
   })
+
+  it('deve exigir dias e horários de disponibilidade para se cadastrar como Monitor (TUTOR)', async () => {
+    const service = new RegisterUserService(mockUsersRepo)
+
+    await expect(
+      service.execute({
+        name: 'Monitor Sem Horário',
+        email: 'monitor.sem.horario@ufabc.edu.br',
+        cpf: '52998224725',
+        password: 'password123',
+        role: 'TUTOR',
+        availability: [],
+      })
+    ).rejects.toThrow(
+      'Para se cadastrar como monitor, é obrigatório informar pelo menos um dia e horário de disponibilidade.'
+    )
+
+    const validAvailability = [
+      { day: 'Segunda-feira', startTime: '14:00', endTime: '18:00' },
+      { day: 'Quarta-feira', startTime: '19:00', endTime: '22:00' },
+    ]
+
+    const result = await service.execute({
+      name: 'Monitor Com Horário',
+      email: 'monitor.com.horario@ufabc.edu.br',
+      cpf: '52998224725',
+      password: 'password123',
+      role: 'TUTOR',
+      availability: validAvailability,
+    })
+
+    expect(result.user.role).toBe('TUTOR')
+    expect(mockUsersRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'TUTOR',
+        availability: validAvailability,
+      })
+    )
+  })
 })

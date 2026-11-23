@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { FinishSessionService } from './finish-session.service.js'
 import { OpenDisputeService } from './open-dispute.service.js'
+import { CancelSessionService } from './cancel-session.service.js'
 import { AppError } from '../../shared/errors/app-error.js'
 import { prisma } from '../../shared/database/prisma.js'
 
@@ -183,6 +184,90 @@ describe('Sessions & Dispute - Unit Tests', () => {
           reason: 'Monitor tentando abrir ticket',
         })
       ).rejects.toThrow('Apenas o aluno da monitoria pode abrir um ticket de reclamação.')
+    })
+  })
+
+  describe('CancelSessionService (Reembolso 50% Aluno / 100% Monitor)', () => {
+    it('deve reembolsar 50% do valor ao aluno quando o próprio ALUNO cancelar a aula', async () => {
+      mockSessionsRepo.findById.mockResolvedValue({
+        id: 'session-cancel-1',
+        requestId: 'req-1',
+        studentId: 'student-1',
+        tutorId: 'tutor-1',
+        status: 'ACTIVE',
+        request: { topic: 'Cálculo 1', offeredPrice: 30.0 },
+        escrow: { id: 'escrow-1', status: 'HELD', amount: 30.0 },
+      })
+
+      const userUpdateMock = vi.fn().mockResolvedValue({ id: 'student-1', credits: 15.0 })
+      const creditTxCreateMock = vi.fn().mockResolvedValue({})
+
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        return callback({
+          tutoringSession: {
+            update: vi.fn().mockResolvedValue({ id: 'session-cancel-1', status: 'CANCELLED' }),
+          },
+          escrowTransaction: { update: vi.fn() },
+          tutoringRequest: { update: vi.fn() },
+          user: { update: userUpdateMock },
+          creditTransaction: { create: creditTxCreateMock },
+        })
+      })
+
+      const service = new CancelSessionService(mockSessionsRepo)
+      const result = await service.execute({
+        sessionId: 'session-cancel-1',
+        userId: 'student-1',
+      })
+
+      expect(result.cancelledBy).toBe('STUDENT')
+      expect(result.refundPercentage).toBe(50)
+      expect(result.refundAmount).toBe(15.0)
+      expect(userUpdateMock).toHaveBeenCalledWith({
+        where: { id: 'student-1' },
+        data: { credits: { increment: 15.0 } },
+      })
+    })
+
+    it('deve reembolsar 100% do valor ao aluno quando o MONITOR cancelar a aula', async () => {
+      mockSessionsRepo.findById.mockResolvedValue({
+        id: 'session-cancel-2',
+        requestId: 'req-2',
+        studentId: 'student-1',
+        tutorId: 'tutor-1',
+        status: 'ACTIVE',
+        request: { topic: 'Física Quântica', offeredPrice: 30.0 },
+        escrow: { id: 'escrow-2', status: 'HELD', amount: 30.0 },
+      })
+
+      const userUpdateMock = vi.fn().mockResolvedValue({ id: 'student-1', credits: 30.0 })
+      const creditTxCreateMock = vi.fn().mockResolvedValue({})
+
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        return callback({
+          tutoringSession: {
+            update: vi.fn().mockResolvedValue({ id: 'session-cancel-2', status: 'CANCELLED' }),
+          },
+          escrowTransaction: { update: vi.fn() },
+          tutoringRequest: { update: vi.fn() },
+          user: { update: userUpdateMock },
+          creditTransaction: { create: creditTxCreateMock },
+        })
+      })
+
+      const service = new CancelSessionService(mockSessionsRepo)
+      const result = await service.execute({
+        sessionId: 'session-cancel-2',
+        userId: 'tutor-1',
+      })
+
+      expect(result.cancelledBy).toBe('TUTOR')
+      expect(result.refundPercentage).toBe(100)
+      expect(result.refundAmount).toBe(30.0)
+      expect(userUpdateMock).toHaveBeenCalledWith({
+        where: { id: 'student-1' },
+        data: { credits: { increment: 30.0 } },
+      })
     })
   })
 })
