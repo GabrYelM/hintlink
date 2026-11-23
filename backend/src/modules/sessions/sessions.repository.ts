@@ -26,6 +26,7 @@ export class SessionsRepository {
             email: true,
             rating: true,
             avatarUrl: true,
+            availability: true,
           },
         },
         escrow: true,
@@ -38,6 +39,19 @@ export class SessionsRepository {
     return prisma.tutoringSession.update({
       where: { id },
       data: { whiteboardData },
+    })
+  }
+
+  async markCallStarted(id: string) {
+    const existing = await prisma.tutoringSession.findUnique({
+      where: { id },
+      select: { callStartedAt: true },
+    })
+    return prisma.tutoringSession.update({
+      where: { id },
+      data: {
+        callStartedAt: existing?.callStartedAt ?? new Date(),
+      },
     })
   }
 
@@ -59,6 +73,9 @@ export class SessionsRepository {
         status: 'ACTIVE',
         OR: [{ studentId: userId }, { tutorId: userId }],
       },
+      orderBy: {
+        startedAt: 'desc',
+      },
       include: {
         request: {
           include: {
@@ -69,7 +86,33 @@ export class SessionsRepository {
           select: { id: true, name: true, avatarUrl: true, rating: true },
         },
         tutor: {
+          select: { id: true, name: true, avatarUrl: true, rating: true, availability: true },
+        },
+        escrow: true,
+      },
+    })
+  }
+
+  async findAllActiveByUserId(userId: string) {
+    return prisma.tutoringSession.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [{ studentId: userId }, { tutorId: userId }],
+      },
+      orderBy: {
+        startedAt: 'desc',
+      },
+      include: {
+        request: {
+          include: {
+            subject: true,
+          },
+        },
+        student: {
           select: { id: true, name: true, avatarUrl: true, rating: true },
+        },
+        tutor: {
+          select: { id: true, name: true, avatarUrl: true, rating: true, availability: true },
         },
         escrow: true,
       },

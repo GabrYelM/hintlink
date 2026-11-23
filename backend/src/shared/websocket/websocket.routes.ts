@@ -118,12 +118,22 @@ export async function websocketRoutes(app: FastifyInstance) {
           // Chat de Agendamento e da Chamada
           if (type === 'ROOM_CHAT' && sessionId) {
             connectionManager.sendToRoom(sessionId, 'ROOM_CHAT', payload, socket)
-            // Persiste no banco de dados para histórico
+            // Persiste no banco de dados e notifica diretamente o outro usuário caso ele não esteja com o modal aberto
             try {
               const session = await prisma.tutoringSession.findUnique({
                 where: { id: sessionId },
-                select: { chatMessages: true },
+                select: { chatMessages: true, studentId: true, tutorId: true },
               })
+              if (session) {
+                const targetUserId =
+                  userId === session.studentId ? session.tutorId : session.studentId
+                if (targetUserId) {
+                  connectionManager.sendToUser(targetUserId, 'CHAT_NOTIFICATION', {
+                    sessionId,
+                    message: payload,
+                  })
+                }
+              }
               const existingMessages = Array.isArray(session?.chatMessages)
                 ? (session.chatMessages as any[])
                 : []
@@ -205,9 +215,38 @@ export async function websocketRoutes(app: FastifyInstance) {
             return
           }
 
-          // Chamada iniciada (notifica o outro participante no chat de agendamento)
+          // Chamada iniciada pelo aluno (notifica o monitor e persiste callStartedAt)
           if (type === 'CALL_STARTED' && sessionId) {
-            connectionManager.sendToRoom(sessionId, 'CALL_STARTED', { startedBy: userId }, socket)
+            if (role === 'STUDENT') {
+              try {
+                const session = await prisma.tutoringSession.findUnique({
+                  where: { id: sessionId },
+                  select: { callStartedAt: true, tutorId: true },
+                })
+                const startedAt = session?.callStartedAt ?? new Date()
+                if (!session?.callStartedAt) {
+                  await prisma.tutoringSession.update({
+                    where: { id: sessionId },
+                    data: { callStartedAt: startedAt },
+                  })
+                }
+                if (session?.tutorId) {
+                  connectionManager.sendToUser(session.tutorId, 'CALL_STARTED', {
+                    sessionId,
+                    startedBy: userId,
+                    callStartedAt: startedAt,
+                  })
+                }
+              } catch {
+                // ignora erro de persistência
+              }
+              connectionManager.sendToRoom(
+                sessionId,
+                'CALL_STARTED',
+                { sessionId, startedBy: userId, callStartedAt: new Date().toISOString() },
+                socket
+              )
+            }
             return
           }
 

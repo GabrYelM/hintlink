@@ -25,6 +25,7 @@ import {
   RefreshCw,
   LogOut,
   Maximize2,
+  Clock,
 } from 'lucide-react'
 import axios from 'axios'
 import { WebSocketMessage } from '@/hooks/use-socket'
@@ -37,6 +38,8 @@ interface VirtualRoomProps {
     role: 'STUDENT' | 'TUTOR' | 'ADMIN'
   }
   isDemoMode?: boolean
+  durationMinutes?: number
+  callStartedAt?: string | null
   sendMessage?: (type: string, payload?: unknown, sessionId?: string) => void
   subscribe?: (callback: (msg: WebSocketMessage) => void) => () => void
   onClose: () => void
@@ -64,6 +67,8 @@ export function VirtualRoom({
   sessionId,
   currentUser,
   isDemoMode = false,
+  durationMinutes = 30,
+  callStartedAt,
   sendMessage,
   subscribe,
   onClose,
@@ -118,6 +123,23 @@ export function VirtualRoom({
   const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null)
   const [autoCloseAlert, setAutoCloseAlert] = useState<string | null>(null)
 
+  // Cronômetro regressivo da chamada (baseado em durationMinutes contratado)
+  const totalDurationSeconds = Math.max(60, Math.round((Number(durationMinutes) || 30) * 60))
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(() => {
+    if (callStartedAt) {
+      const startedMs = new Date(callStartedAt).getTime()
+      if (!Number.isNaN(startedMs)) {
+        const elapsedSec = Math.floor((Date.now() - startedMs) / 1000)
+        if (elapsedSec >= 0 && elapsedSec < totalDurationSeconds) {
+          return totalDurationSeconds - elapsedSec
+        }
+      }
+    }
+    return totalDurationSeconds
+  })
+  const hasWarnedOneMinuteRef = useRef(false)
+  const hasAutoEndedRef = useRef(false)
+
   // Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
@@ -171,6 +193,74 @@ export function VirtualRoom({
   }
 
   const isStudent = currentUser.role === 'STUDENT'
+
+  const formatCountdown = (sec: number) => {
+    const safeSec = Math.max(0, sec)
+    const hrs = Math.floor(safeSec / 3600)
+    const mins = Math.floor((safeSec % 3600) / 60)
+    const secs = safeSec % 60
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return hrs > 0 ? `${pad(hrs)}:${pad(mins)}:${pad(secs)}` : `${pad(mins)}:${pad(secs)}`
+  }
+
+  // Contagem regressiva de tempo de chamada + aviso de 1 minuto + encerramento automático
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (remainingSeconds <= 60 && remainingSeconds > 0 && !hasWarnedOneMinuteRef.current) {
+      hasWarnedOneMinuteRef.current = true
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `warn-60-${Date.now()}`,
+          senderName: 'Sistema Hintlink',
+          senderRole: 'BOT',
+          text: '⚠️ Atenção: Falta 1 minuto para o término do tempo contratado da aula! A chamada se encerrará automaticamente ao final do tempo.',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ])
+    }
+
+    if (remainingSeconds === 0 && !hasAutoEndedRef.current) {
+      hasAutoEndedRef.current = true
+      setAutoCloseAlert(
+        '⏰ O tempo contratado da monitoria chegou ao fim! Encerrando a chamada automaticamente e liberando os créditos em custódia...'
+      )
+
+      const finishAutomatically = async () => {
+        if (!isDemoMode) {
+          try {
+            if (isStudent) {
+              await api.post(`/sessions/${sessionId}/finish`, {
+                studentRating: 5,
+                studentFeedback: 'Aula concluída automaticamente ao atingir o tempo contratado.',
+              })
+              sendMessage?.('CALL_ENDED_BY_STUDENT', { resolved: true, reason: 'TIME_EXPIRED' }, sessionId)
+            }
+          } catch {
+            // Se já tiver sido finalizada pelo outro lado, apenas fecha a sala
+          }
+        }
+        setTimeout(() => {
+          onClose()
+        }, 3000)
+      }
+
+      finishAutomatically()
+    }
+  }, [remainingSeconds, isDemoMode, isStudent, sessionId, sendMessage, onClose])
 
   // Replay Strokes on Canvas
   const replayStrokes = useCallback(() => {
@@ -1553,6 +1643,19 @@ export function VirtualRoom({
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>Custódia Pix HELD</span>
           </div>
+
+          {/* Cronômetro Regressivo da Aula */}
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-black border transition-all ${
+              remainingSeconds <= 60
+                ? 'bg-rose-600 text-white border-rose-400 animate-pulse shadow-lg shadow-rose-900/50'
+                : 'bg-slate-800 text-emerald-400 border-slate-700'
+            }`}
+            title="Tempo restante da aula"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>{formatCountdown(remainingSeconds)}</span>
+          </div>
         </div>
 
         {/* Alternância de Foco: Vídeo ou Quadro Branco */}
@@ -1635,7 +1738,17 @@ export function VirtualRoom({
         </div>
       </header>
 
-      {/* Alerta de encerramento automático disparado pelo aluno para o monitor */}
+      {/* Alerta de 1 Minuto Restante para o Fim da Aula */}
+      {remainingSeconds <= 60 && remainingSeconds > 0 && !autoCloseAlert && (
+        <div className="bg-amber-500 text-slate-950 text-center py-2 px-4 text-xs sm:text-sm font-black flex items-center justify-center gap-2 animate-pulse shadow-md z-40">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            ⚠️ Atenção: A aula está acabando! Restam apenas {remainingSeconds} segundos — a chamada será encerrada automaticamente ao final do tempo.
+          </span>
+        </div>
+      )}
+
+      {/* Alerta de encerramento automático disparado pelo aluno ou pelo fim do tempo */}
       {autoCloseAlert && (
         <div className="bg-emerald-600 text-white text-center py-2.5 px-4 text-xs font-extrabold flex items-center justify-center gap-2 animate-bounce">
           <CheckCircle2 className="w-4 h-4" />

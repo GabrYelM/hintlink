@@ -27,10 +27,14 @@ export interface SessionChatModalProps {
   session: {
     id: string
     durationMinutes: number
+    callStartedAt?: string | null
     request?: {
       topic: string
       description?: string
       offeredPrice: number | string
+      preferredDays?: string[]
+      preferredHours?: string
+      studentAvailability?: Array<{ day: string; startTime: string; endTime: string }>
       subject?: {
         code: string
         name: string
@@ -57,6 +61,7 @@ export interface SessionChatModalProps {
     name: string
     role: 'STUDENT' | 'TUTOR' | 'ADMIN'
   }
+  isCallStartedByStudent?: boolean
   sendMessage: (type: string, payload?: unknown, sessionId?: string) => void
   subscribe: (callback: (msg: WebSocketMessage) => void) => () => void
   onStartCall: () => void
@@ -66,6 +71,7 @@ export interface SessionChatModalProps {
 export function SessionChatModal({
   session,
   currentUser,
+  isCallStartedByStudent = false,
   sendMessage,
   subscribe,
   onStartCall,
@@ -81,18 +87,26 @@ export function SessionChatModal({
         senderId: 'system',
         senderName: 'Sistema Hintlink',
         senderRole: 'BOT',
-        text: 'Chamado aceito com sucesso! Usem este chat para alinhar dúvidas, materiais ou combinar o melhor horário antes de iniciar o vídeo.',
+        text: 'Chamado aceito com sucesso! Usem este chat para alinhar dúvidas, materiais ou combinar o melhor horário. Apenas o ALUNO pode iniciar a chamada de vídeo (quando iniciada, o cronômetro da aula começará a contar).',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       },
     ]
   })
   const [inputText, setInputText] = useState('')
-  const [isPartnerInCall, setIsPartnerInCall] = useState(false)
+  const [isPartnerInCall, setIsPartnerInCall] = useState(
+    Boolean(session.callStartedAt) || isCallStartedByStudent
+  )
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
   const isStudent = currentUser.role === 'STUDENT'
   const partner = isStudent ? session.tutor : session.student
   const partnerRoleLabel = isStudent ? 'Monitor' : 'Aluno'
+
+  useEffect(() => {
+    if (session.callStartedAt || isCallStartedByStudent) {
+      setIsPartnerInCall(true)
+    }
+  }, [session.callStartedAt, isCallStartedByStudent])
 
   // Join Room via WebSocket & Listen for events
   useEffect(() => {
@@ -143,7 +157,12 @@ export function SessionChatModal({
   }
 
   function handleLaunchCall() {
-    sendMessage('CALL_STARTED', { startedBy: currentUser.id }, session.id)
+    if (!isStudent && !isPartnerInCall) {
+      return
+    }
+    if (isStudent) {
+      sendMessage('CALL_STARTED', { startedBy: currentUser.id }, session.id)
+    }
     onStartCall()
   }
 
@@ -218,12 +237,16 @@ export function SessionChatModal({
           </div>
         </div>
 
-        {/* Banner de Chamada Pronta / Em Andamento */}
+        {/* Banner de Chamada Pronta / Controle de Início Exclusivo do Aluno */}
         {isPartnerInCall ? (
           <div className="bg-emerald-600 text-white px-5 py-2.5 flex items-center justify-between animate-pulse shrink-0">
             <div className="flex items-center gap-2 text-xs font-bold">
               <span className="h-2.5 w-2.5 rounded-full bg-white"></span>
-              <span>O {partnerRoleLabel} já está aguardando na chamada de vídeo!</span>
+              <span>
+                {isStudent
+                  ? 'A chamada de vídeo já foi iniciada! O tempo de aula está correndo.'
+                  : '🔔 O Aluno iniciou a chamada de vídeo! Entre agora na sala.'}
+              </span>
             </div>
             <button
               onClick={handleLaunchCall}
@@ -233,18 +256,28 @@ export function SessionChatModal({
               <span>Entrar na Aula Agora</span>
             </button>
           </div>
-        ) : (
-          <div className="bg-brand-blue/5 border-b border-brand-blue/10 px-5 py-2 flex items-center justify-between text-xs shrink-0">
+        ) : isStudent ? (
+          <div className="bg-brand-blue/5 border-b border-brand-blue/10 px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
             <span className="text-slate-600 font-medium">
-              Alinhem o dia e a hora pelo chat ou cliquem no botão para iniciar imediatamente:
+              Alinhe com o monitor pelo chat. Quando estiver pronto, <strong>você (Aluno)</strong> inicia a chamada e o cronômetro de {session.durationMinutes} min começará:
             </span>
             <button
               onClick={handleLaunchCall}
-              className="px-4 py-1.5 rounded-xl bg-brand-yellow hover:bg-amber-400 text-brand-dark font-extrabold text-xs shadow-md shadow-brand-yellow/20 flex items-center gap-1.5 transition-all"
+              className="px-4 py-1.5 rounded-xl bg-brand-yellow hover:bg-amber-400 text-brand-dark font-extrabold text-xs shadow-md shadow-brand-yellow/20 flex items-center gap-1.5 transition-all shrink-0"
             >
               <Video className="w-3.5 h-3.5" />
-              <span>Iniciar Videochamada</span>
+              <span>Iniciar Chamada ({session.durationMinutes} min)</span>
             </button>
+          </div>
+        ) : (
+          <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+            <span className="text-amber-900 font-semibold">
+              ⏳ Combine os detalhes no chat abaixo. A chamada de vídeo só pode ser iniciada pelo <strong>Aluno</strong> (você será notificado assim que ele iniciar).
+            </span>
+            <span className="px-3 py-1.5 rounded-xl bg-amber-200/70 text-amber-900 font-extrabold text-[11px] flex items-center gap-1.5 shrink-0 cursor-not-allowed">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Aguardando Aluno Iniciar...</span>
+            </span>
           </div>
         )}
 
