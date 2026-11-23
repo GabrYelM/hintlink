@@ -3,6 +3,7 @@ import { RequestsRepository } from './requests.repository.js'
 import { AcademicRecordsRepository } from '../academic-records/academic-records.repository.js'
 import { UsersRepository } from '../users/users.repository.js'
 import { AppError } from '../../shared/errors/app-error.js'
+import { doesTutorFulfillStudentSchedule } from './matchmaking.service.js'
 
 interface AcceptRequestInput {
   requestId: string
@@ -36,21 +37,47 @@ export class AcceptRequestService {
       throw new AppError('Você foi recusado pelo aluno para este chamado e não pode aceitá-lo novamente.', 403)
     }
 
-    // Regra de segurança acadêmica: O monitor precisa ter a matéria aprovada
-    const hasApprovedRecord = await this.academicRecordsRepository.findByUserAndSubject(
-      tutorId,
-      request.subjectId
-    )
+    const isDirectRequestForThisTutor =
+      typeof request.matchQueue === 'string' &&
+      request.matchQueue.startsWith('DIRECT:')
 
-    if (!hasApprovedRecord || !hasApprovedRecord.isApproved) {
-      throw new AppError(
-        'Você não possui esta matéria aprovada em seu histórico acadêmico para monitorar.',
-        403
+    if (isDirectRequestForThisTutor && request.matchQueue !== `DIRECT:${tutorId}`) {
+      throw new AppError('Esta solicitação de aula direta foi enviada exclusivamente para outro monitor.', 403)
+    }
+
+    // Regra de segurança acadêmica: O monitor precisa ter a matéria aprovada (exceto quando o aluno solicitou aula direta com ele pelo chat)
+    if (!isDirectRequestForThisTutor) {
+      const hasApprovedRecord = await this.academicRecordsRepository.findByUserAndSubject(
+        tutorId,
+        request.subjectId
       )
+
+      if (!hasApprovedRecord || !hasApprovedRecord.isApproved) {
+        throw new AppError(
+          'Você não possui esta matéria aprovada em seu histórico acadêmico para monitorar.',
+          403
+        )
+      }
     }
 
     // Busca detalhes do monitor e número de sessões finalizadas
     const tutorUser = await this.usersRepository.findById(tutorId).catch(() => null)
+
+    // Valida compatibilidade de agenda caso o chamado tenha horários independentes definidos pelo aluno (exceto aula direta pelo chat)
+    const studentAvail = (request as any).studentAvailability
+    if (!isDirectRequestForThisTutor && Array.isArray(studentAvail) && studentAvail.length > 0 && tutorUser) {
+      const compatible = doesTutorFulfillStudentSchedule(
+        studentAvail,
+        tutorUser.availability,
+        request.durationMinutes || 15
+      )
+      if (!compatible) {
+        throw new AppError(
+          'Sua grade de disponibilidade cadastrada não atende aos dias e horários solicitados pelo aluno para este chamado.',
+          403
+        )
+      }
+    }
     let completedSessionsCount = 0
     try {
       completedSessionsCount = await this.usersRepository.countFinishedSessions(tutorId)
@@ -67,6 +94,7 @@ export class AcceptRequestService {
       totalReviews: tutorUser?.totalReviews ?? 0,
       completedSessionsCount,
       isNovel: completedSessionsCount < 5,
+      availability: tutorUser?.availability || [],
     }
 
     // Transação ACID: Atualiza o chamado para MATCHED, cria a Sessão e abre a Custódia (Escrow)

@@ -5,9 +5,10 @@
  */
 
 export const PRICING_TIERS = {
-  MIN_DURATION_MINUTES: 15,
+  MIN_DURATION_MINUTES: 1,
   RATE_PER_MINUTE: 0.5, // R$ 30,00 / 60 min = R$ 0,50 por minuto
   PRICE_PER_HOUR: 30.0,
+  DIRECT_TUTOR_MULTIPLIER: 1.15, // +15% para aula solicitada diretamente a um monitor específico no chat (R$ 34,50/hora)
 } as const
 
 /**
@@ -20,9 +21,19 @@ export const PRICING_TIERS = {
  */
 export function calculatePriceByDuration(durationMinutes: number): number {
   if (durationMinutes < PRICING_TIERS.MIN_DURATION_MINUTES) {
-    throw new Error(`A duração mínima de monitoria é de ${PRICING_TIERS.MIN_DURATION_MINUTES} minutos.`)
+    throw new Error(
+      `A duração mínima de monitoria é de ${PRICING_TIERS.MIN_DURATION_MINUTES} ${PRICING_TIERS.MIN_DURATION_MINUTES === 1 ? 'minuto' : 'minutos'}.`
+    )
   }
 
   const total = durationMinutes * PRICING_TIERS.RATE_PER_MINUTE
   return Number(total.toFixed(2))
+}
+
+/**
+ * Calcula o preço de uma aula solicitada diretamente pelo chat a um monitor (+15% por hora = R$ 34,50/h)
+ */
+export function calculateDirectTutorPriceByDuration(durationMinutes: number): number {
+  const basePrice = calculatePriceByDuration(durationMinutes)
+  return Number((basePrice * PRICING_TIERS.DIRECT_TUTOR_MULTIPLIER).toFixed(2))
 }

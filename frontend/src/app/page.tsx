@@ -1,14 +1,30 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { api, setAuthToken } from '@/services/api'
 import { HintlinkLogo } from '@/components/HintlinkLogo'
 import { StudentDashboard } from '@/components/StudentDashboard'
 import { TutorDashboard } from '@/components/TutorDashboard'
 import { ProfileModal } from '@/components/ProfileModal'
 import { VirtualRoom } from '@/components/VirtualRoom'
-import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2, LogOut, Sparkles } from 'lucide-react'
+import { BookOpen, Clock, ShieldCheck, ArrowRight, CheckCircle2, LogOut, Sparkles, Wallet, Calendar } from 'lucide-react'
 import axios from 'axios'
+
+export interface AvailabilitySlot {
+  day: string
+  startTime: string
+  endTime: string
+}
+
+const WEEKDAYS = [
+  'Segunda-feira',
+  'Terça-feira',
+  'Quarta-feira',
+  'Quinta-feira',
+  'Sexta-feira',
+  'Sábado',
+  'Domingo',
+]
 
 interface UserProfile {
   id: string
@@ -19,6 +35,8 @@ interface UserProfile {
   role: 'STUDENT' | 'TUTOR' | 'ADMIN'
   rating: number
   totalReviews: number
+  credits?: number | string
+  availability?: AvailabilitySlot[]
 }
 
 export default function Home() {
@@ -32,6 +50,10 @@ export default function Home() {
   const [loginIdentifier, setLoginIdentifier] = useState('')
   const [cpf, setCpf] = useState('')
   const [password, setPassword] = useState('')
+  const [tutorAvailability, setTutorAvailability] = useState<AvailabilitySlot[]>([
+    { day: 'Segunda-feira', startTime: '14:00', endTime: '18:00' },
+    { day: 'Quarta-feira', startTime: '14:00', endTime: '18:00' },
+  ])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -39,6 +61,22 @@ export default function Home() {
   const [initializing, setInitializing] = useState(true)
   const [isProfileOpen, setIsProfileOpen] = useState(false)
   const [isDemoRoomOpen, setIsDemoRoomOpen] = useState(false)
+
+  function toggleRegisterDay(day: string) {
+    setTutorAvailability((prev) => {
+      const exists = prev.find((item) => item.day === day)
+      if (exists) {
+        return prev.filter((item) => item.day !== day)
+      }
+      return [...prev, { day, startTime: '14:00', endTime: '18:00' }]
+    })
+  }
+
+  function updateRegisterSlotTime(day: string, field: 'startTime' | 'endTime', value: string) {
+    setTutorAvailability((prev) =>
+      prev.map((item) => (item.day === day ? { ...item, [field]: value } : item))
+    )
+  }
 
   // Verifica se o usuário já estava logado ao abrir o site
   useEffect(() => {
@@ -62,6 +100,12 @@ export default function Home() {
     e.preventDefault()
     setError(null)
     setSuccess(null)
+
+    if (role === 'TUTOR' && tutorAvailability.length === 0) {
+      setError('Para se cadastrar como monitor, selecione pelo menos um dia e horário de disponibilidade.')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -72,6 +116,7 @@ export default function Home() {
         cpf,
         password,
         role,
+        availability: role === 'TUTOR' ? tutorAvailability : undefined,
       })
 
       setAuthToken(response.data.token)
@@ -111,6 +156,10 @@ export default function Home() {
       setLoading(false)
     }
   }
+
+  const handleCreditsChange = useCallback((newCredits: number) => {
+    setLoggedUser((prev) => (prev ? { ...prev, credits: newCredits } : prev))
+  }, [])
 
   function handleLogout() {
     setAuthToken(null)
@@ -153,6 +202,11 @@ export default function Home() {
 
             {loggedUser ? (
               <div className="flex items-center gap-3">
+                <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-extrabold">
+                  <Wallet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{Number(loggedUser.credits ?? 0).toFixed(2)} créd.</span>
+                </div>
+
                 <button
                   onClick={() => setIsProfileOpen(true)}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 hover:border-brand-purple/40 hover:bg-slate-50 transition-all text-left"
@@ -189,9 +243,9 @@ export default function Home() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 flex-1 w-full">
         {loggedUser ? (
           loggedUser.role === 'STUDENT' ? (
-            <StudentDashboard user={loggedUser} />
+            <StudentDashboard user={loggedUser} onCreditsChange={handleCreditsChange} />
           ) : (
-            <TutorDashboard user={loggedUser} />
+            <TutorDashboard user={loggedUser} onCreditsChange={handleCreditsChange} />
           )
         ) : (
           <div className="py-8 lg:py-16 grid lg:grid-cols-12 gap-12 items-center">
@@ -433,6 +487,75 @@ export default function Home() {
                         />
                       </div>
                     </div>
+
+                    {/* Formulário Obrigatório de Dias e Horários quando for Monitor */}
+                    {role === 'TUTOR' && (
+                      <div className="p-3.5 rounded-2xl bg-brand-purple/5 border border-brand-purple/25 space-y-3">
+                        <div className="flex items-center gap-2 text-brand-purple">
+                          <Calendar className="w-4 h-4 shrink-0" />
+                          <span className="text-xs font-extrabold">
+                            Dias e Horários Disponíveis para Monitoria (Obrigatório)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Selecione os dias da semana e o intervalo de horas em que você pode atender alunos (você poderá alterar isso no seu perfil a qualquer momento).
+                        </p>
+
+                        <div className="flex flex-wrap gap-1.5">
+                          {WEEKDAYS.map((day) => {
+                            const isSelected = tutorAvailability.some((s) => s.day === day)
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                onClick={() => toggleRegisterDay(day)}
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                                  isSelected
+                                    ? 'bg-brand-purple text-white border-brand-purple shadow-sm'
+                                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                }`}
+                              >
+                                {day.replace('-feira', '')}
+                              </button>
+                            )
+                          })}
+                        </div>
+
+                        {tutorAvailability.length > 0 && (
+                          <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1 pt-1">
+                            {tutorAvailability.map((slot) => (
+                              <div
+                                key={slot.day}
+                                className="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs"
+                              >
+                                <span className="font-bold text-brand-dark truncate w-24">
+                                  {slot.day.replace('-feira', '')}
+                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    type="time"
+                                    value={slot.startTime}
+                                    onChange={(e) =>
+                                      updateRegisterSlotTime(slot.day, 'startTime', e.target.value)
+                                    }
+                                    className="px-2 py-1 rounded-lg bg-brand-light border border-slate-200 text-[11px] font-semibold"
+                                  />
+                                  <span className="text-slate-400 text-[10px]">até</span>
+                                  <input
+                                    type="time"
+                                    value={slot.endTime}
+                                    onChange={(e) =>
+                                      updateRegisterSlotTime(slot.day, 'endTime', e.target.value)
+                                    }
+                                    className="px-2 py-1 rounded-lg bg-brand-light border border-slate-200 text-[11px] font-semibold"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <button
                       type="submit"

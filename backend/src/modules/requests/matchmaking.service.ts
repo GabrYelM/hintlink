@@ -1,5 +1,11 @@
 import { prisma } from '../../shared/database/prisma.js'
 
+export interface ScheduleSlot {
+  day: string
+  startTime: string
+  endTime: string
+}
+
 export interface TutorCandidate {
   id: string
   name: string
@@ -9,6 +15,7 @@ export interface TutorCandidate {
   totalReviews: number
   completedSessionsCount: number
   isNovel: boolean // true se < 5 monitorias realizadas
+  availability?: ScheduleSlot[]
 }
 
 export type MatchQueueType = 'NORMAL' | 'NOVEL'
@@ -19,6 +26,71 @@ export interface MatchmakingInput {
   studentId: string
   rejectedTutorIds?: string[]
   requestIndex?: number // contador ou índice para alternância 50/50
+  studentAvailability?: ScheduleSlot[]
+  durationMinutes?: number
+}
+
+export function normalizeDayName(day: string): string {
+  return (day || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace('-feira', '')
+    .replace(/\s+/g, '')
+    .trim()
+}
+
+export function parseTimeToMinutes(timeStr: string): number {
+  const [hStr, mStr] = (timeStr || '00:00').split(':')
+  const h = Number(hStr) || 0
+  const m = Number(mStr) || 0
+  return h * 60 + m
+}
+
+/**
+ * Verifica se a grade de disponibilidade do monitor cumpre pelo menos um dos horários
+ * informados pelo aluno na solicitação de monitoria.
+ */
+export function doesTutorFulfillStudentSchedule(
+  studentSlots?: ScheduleSlot[] | null,
+  tutorSlots?: ScheduleSlot[] | null,
+  durationMinutes = 15
+): boolean {
+  if (!Array.isArray(studentSlots) || studentSlots.length === 0) {
+    return true
+  }
+
+  if (!Array.isArray(tutorSlots) || tutorSlots.length === 0) {
+    return false
+  }
+
+  for (const sSlot of studentSlots) {
+    const sDay = normalizeDayName(sSlot.day)
+    const sStart = parseTimeToMinutes(sSlot.startTime)
+    const sEnd = parseTimeToMinutes(sSlot.endTime)
+    const sWindow = sEnd - sStart
+    if (sWindow <= 0) continue
+
+    const requiredMinutes = Math.min(Math.max(1, durationMinutes), sWindow)
+
+    for (const tSlot of tutorSlots) {
+      const tDay = normalizeDayName(tSlot.day)
+      if (sDay !== tDay) continue
+
+      const tStart = parseTimeToMinutes(tSlot.startTime)
+      const tEnd = parseTimeToMinutes(tSlot.endTime)
+
+      const overlapStart = Math.max(sStart, tStart)
+      const overlapEnd = Math.min(sEnd, tEnd)
+      const overlapMinutes = overlapEnd - overlapStart
+
+      if (overlapMinutes >= requiredMinutes) {
+        return true
+      }
+    }
+  }
+
+  return false
 }
 
 export interface MatchmakingResult {
@@ -76,6 +148,8 @@ export class MatchmakingService {
     studentId,
     rejectedTutorIds = [],
     requestIndex,
+    studentAvailability,
+    durationMinutes = 30,
   }: MatchmakingInput): Promise<MatchmakingResult> {
     // 1. Busca todos os monitores aprovados nesta disciplina
     const approvedRecords = await prisma.academicRecord.findMany({
@@ -102,9 +176,18 @@ export class MatchmakingService {
       },
     })
 
-    // 2. Mapeia e classifica os candidatos
+    // 2. Mapeia e classifica os candidatos (filtrando também pelos horários compatíveis quando informados)
     const candidates: TutorCandidate[] = approvedRecords
       .filter((record) => record.user.role === 'TUTOR' || record.user.role === 'ADMIN')
+      .filter((record) => {
+        if (!Array.isArray(studentAvailability) || studentAvailability.length === 0) {
+          return true
+        }
+        const tutorSlots = Array.isArray(record.user.availability)
+          ? (record.user.availability as unknown as ScheduleSlot[])
+          : []
+        return doesTutorFulfillStudentSchedule(studentAvailability, tutorSlots, durationMinutes)
+      })
       .map((record) => {
         const completedSessionsCount = record.user.sessionsAsTutor.length
         return {
@@ -116,6 +199,9 @@ export class MatchmakingService {
           totalReviews: record.user.totalReviews,
           completedSessionsCount,
           isNovel: isNovelTutor(completedSessionsCount),
+          availability: Array.isArray(record.user.availability)
+            ? (record.user.availability as unknown as ScheduleSlot[])
+            : [],
         }
       })
 

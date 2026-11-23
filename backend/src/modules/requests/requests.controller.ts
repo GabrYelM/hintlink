@@ -1,5 +1,6 @@
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
+import { prisma } from '../../shared/database/prisma.js'
 import { RequestsRepository } from './requests.repository.js'
 import { SubjectsRepository } from '../subjects/subjects.repository.js'
 import { UsersRepository } from '../users/users.repository.js'
@@ -16,13 +17,31 @@ export async function createRequest(request: FastifyRequest, reply: FastifyReply
     subjectId: z.string().uuid('ID de matéria inválido'),
     topic: z.string().min(3, 'O tópico deve ter no mínimo 3 caracteres'),
     description: z.string().optional(),
-    durationMinutes: z.number().int().min(15).default(30),
+    durationMinutes: z.number().int().min(1).default(30),
     // O valor não é mais definido pelo aluno; aceito como opcional para compatibilidade
     offeredPrice: z.number().positive().optional(),
+    preferredDays: z.array(z.string()).optional(),
+    preferredHours: z.string().optional(),
+    studentAvailability: z
+      .array(
+        z.object({
+          day: z.string(),
+          startTime: z.string(),
+          endTime: z.string(),
+        })
+      )
+      .optional(),
   })
 
-  const { subjectId, topic, description, durationMinutes } =
-    createRequestBodySchema.parse(request.body)
+  const {
+    subjectId,
+    topic,
+    description,
+    durationMinutes,
+    preferredDays,
+    preferredHours,
+    studentAvailability,
+  } = createRequestBodySchema.parse(request.body)
 
   const requestsRepository = new RequestsRepository()
   const subjectsRepository = new SubjectsRepository()
@@ -34,19 +53,24 @@ export async function createRequest(request: FastifyRequest, reply: FastifyReply
     usersRepository
   )
 
-  const { tutoringRequest } = await createRequestService.execute({
+  const { tutoringRequest, remainingCredits } = await createRequestService.execute({
     studentId: request.user.sub,
     subjectId,
     topic,
     description,
     durationMinutes,
+    preferredDays,
+    preferredHours,
+    studentAvailability,
   })
 
-  // 🚀 Executa o Matchmaking Inteligente (Divisão 50/50 e ranking por avaliação)
+  // 🚀 Executa o Matchmaking Inteligente (Divisão 50/50, filtro de horário e ranking por avaliação)
   const matchmakingService = new MatchmakingService()
   const matchResult = await matchmakingService.execute({
     subjectId: tutoringRequest.subjectId,
     studentId: tutoringRequest.studentId,
+    studentAvailability: (tutoringRequest as any).studentAvailability as any,
+    durationMinutes: tutoringRequest.durationMinutes,
   })
 
   // 🚀 DISPARO EM TEMPO REAL VIA WEBSOCKET (EFEITO UBER):
@@ -57,6 +81,9 @@ export async function createRequest(request: FastifyRequest, reply: FastifyReply
     topic: tutoringRequest.topic,
     durationMinutes: tutoringRequest.durationMinutes,
     offeredPrice: tutoringRequest.offeredPrice,
+    preferredDays: tutoringRequest.preferredDays,
+    preferredHours: tutoringRequest.preferredHours,
+    studentAvailability: (tutoringRequest as any).studentAvailability,
     studentId: tutoringRequest.studentId,
     createdAt: tutoringRequest.createdAt,
     matchQueue: tutoringRequest.matchQueue,
@@ -66,6 +93,7 @@ export async function createRequest(request: FastifyRequest, reply: FastifyReply
   return reply.status(201).send({
     request: tutoringRequest,
     matchmaking: matchResult,
+    remainingCredits,
   })
 }
 
@@ -187,4 +215,71 @@ export async function getMatchmakingForRequest(request: FastifyRequest, reply: F
   })
 
   return reply.status(200).send(result)
+}
+
+export async function cancelRequest(request: FastifyRequest, reply: FastifyReply) {
+  const paramsSchema = z.object({
+    id: z.string().uuid('ID de chamado inválido'),
+  })
+
+  const { id } = paramsSchema.parse(request.params)
+  const requestsRepository = new RequestsRepository()
+  const tutoringRequest = await requestsRepository.findById(id)
+
+  if (!tutoringRequest) {
+    return reply.status(404).send({ message: 'Chamado não encontrado.' })
+  }
+
+  if (tutoringRequest.studentId !== request.user.sub) {
+    return reply.status(403).send({ message: 'Apenas o aluno dono do chamado pode cancelá-lo.' })
+  }
+
+  if (tutoringRequest.status !== 'OPEN') {
+    return reply.status(400).send({
+      message: 'Apenas chamados em aberto (ainda sem monitor em atendimento) podem ser cancelados diretamente.',
+    })
+  }
+
+  const refundAmount = Number(tutoringRequest.offeredPrice)
+
+  const result = await prisma.$transaction(async (tx) => {
+    const cancelledRequest = await tx.tutoringRequest.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+    })
+
+    const updatedUser = await tx.user.update({
+      where: { id: tutoringRequest.studentId },
+      data: {
+        credits: {
+          increment: refundAmount,
+        },
+      },
+    })
+
+    await tx.creditTransaction.create({
+      data: {
+        userId: tutoringRequest.studentId,
+        type: 'ESCROW_REFUND',
+        amount: refundAmount,
+        description: `Estorno de créditos por cancelamento do chamado: ${tutoringRequest.topic}`,
+        referenceId: id,
+      },
+    })
+
+    return {
+      request: cancelledRequest,
+      credits: Number(updatedUser.credits),
+    }
+  })
+
+  connectionManager.broadcastToRole('TUTOR', 'REQUEST_TAKEN', {
+    requestId: id,
+  })
+
+  return reply.status(200).send({
+    message: `Chamado cancelado e ${refundAmount.toFixed(2)} créditos estornados para sua carteira!`,
+    request: result.request,
+    credits: result.credits,
+  })
 }

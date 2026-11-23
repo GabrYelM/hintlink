@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import {
   acceptRequest,
+  cancelRequest,
   createRequest,
   listOpenRequests,
   rejectMatchedTutor,
@@ -31,11 +32,25 @@ export async function requestsRoutes(app: FastifyInstance) {
       schema: {
         tags: ['Chamados de Monitoria (Estilo Uber)'],
         summary: 'Aluno abre chamado de dúvida',
-        description: 'Cria uma nova solicitação informando disciplina, tópico da dúvida e duração. O valor é calculado automaticamente pela tabela de tempo.',
+        description: 'Cria uma nova solicitação informando disciplina, tópico da dúvida e duração. O valor é calculado automaticamente pela tabela de tempo e retido em créditos.',
         security: [{ bearerAuth: [] }],
       },
     },
     createRequest
+  )
+
+  app.patch(
+    '/requests/:id/cancel',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Chamados de Monitoria (Estilo Uber)'],
+        summary: 'Aluno cancela chamado em aberto e recebe estorno de créditos',
+        description: 'Cancela uma solicitação ainda em aberto (OPEN) e devolve integralmente os créditos retidos para a carteira do aluno.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    cancelRequest
   )
 
   app.patch(
