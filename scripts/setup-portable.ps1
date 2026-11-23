@@ -121,15 +121,53 @@ if ($IsPort5432Open) {
     cmd.exe /c "`"$Createdb`" -U hintlink_user -h 127.0.0.1 -p 5432 hintlink_db >nul 2>&1"
 }
 
-# 3. Validar Migracoes e Seeds do Banco
-Write-Host "[3/5] Aplicando tabelas e registros iniciais da UFABC..." -ForegroundColor Yellow
+# 3. Configurar .env, Dependencias e Validar Migracoes e Seeds do Banco
+Write-Host "[3/5] Configurando dependencias, tabelas e registros iniciais da UFABC..." -ForegroundColor Yellow
 $BackendDir = Join-Path $RootDir "backend"
+$FrontendDir = Join-Path $RootDir "frontend"
+
+# Garante que backend/.env existe mesmo apos um git clone limpo
+$BackendEnvPath = Join-Path $BackendDir ".env"
+if (-not (Test-Path $BackendEnvPath)) {
+    Write-Host "  -> Criando arquivo backend/.env padrao..." -ForegroundColor Cyan
+    @(
+        "PORT=3333"
+        "NODE_ENV=development"
+        "DATABASE_URL=`"postgresql://hintlink_user:hintlink_password@localhost:5432/hintlink_db?schema=public`""
+        "REDIS_HOST=localhost"
+        "REDIS_PORT=6379"
+        "JWT_SECRET=`"hintlink_super_secret_jwt_key_change_in_production`""
+        "JWT_EXPIRES_IN=`"7d`""
+        "FRONTEND_URL=`"http://localhost:3000`""
+    ) | Out-File -FilePath $BackendEnvPath -Encoding utf8
+}
+
+# Instala node_modules do backend se nao existir
+if (-not (Test-Path (Join-Path $BackendDir "node_modules"))) {
+    Write-Host "  -> Instalando pacotes do Backend (npm install)..." -ForegroundColor Cyan
+    Push-Location $BackendDir
+    cmd.exe /c "npm install"
+    Pop-Location
+}
+
+# Instala node_modules do frontend se nao existir
+if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
+    Write-Host "  -> Instalando pacotes do Frontend (npm install)..." -ForegroundColor Cyan
+    Push-Location $FrontendDir
+    cmd.exe /c "npm install"
+    Pop-Location
+}
+
 Push-Location $BackendDir
 try {
+    if (-not (Test-Path (Join-Path $BackendDir "node_modules\.prisma\client\index.js"))) {
+        Write-Host "  -> Gerando Prisma Client..." -ForegroundColor Cyan
+        cmd.exe /c "npx prisma generate" | Out-Null
+    }
     Write-Host "  -> Sincronizando schema Prisma..." -ForegroundColor Cyan
-    & npx prisma db push --skip-generate | Out-Null
-    Write-Host "  -> Executando seed de usuarios e materias..." -ForegroundColor Cyan
-    & npx prisma db seed | Out-Null
+    cmd.exe /c "npx prisma db push --skip-generate --accept-data-loss" | Out-Null
+    Write-Host "  -> Executando seed de usuarios, creditos, disponibilidade e materias..." -ForegroundColor Cyan
+    cmd.exe /c "npx prisma db seed" | Out-Null
     Write-Host "  -> Banco de dados pronto e populado!" -ForegroundColor Green
 } catch {
     Write-Host "  [AVISO] Verifique a conexao com o banco de dados." -ForegroundColor Yellow
@@ -139,19 +177,18 @@ try {
 
 # 4. Compilar Builds de Producao (se ainda nao foram gerados)
 Write-Host "[4/5] Verificando compilacao dos sistemas (Next.js & Fastify)..." -ForegroundColor Yellow
-$FrontendDir = Join-Path $RootDir "frontend"
 
 if (-not (Test-Path (Join-Path $BackendDir "dist\server.js"))) {
     Write-Host "  -> Compilando Backend Fastify..." -ForegroundColor Cyan
     Push-Location $BackendDir
-    & npm run build | Out-Null
+    cmd.exe /c "npm run build" | Out-Null
     Pop-Location
 }
 
-if (-not (Test-Path (Join-Path $FrontendDir ".next"))) {
+if (-not (Test-Path (Join-Path $FrontendDir ".next\BUILD_ID"))) {
     Write-Host "  -> Compilando Frontend Next.js..." -ForegroundColor Cyan
     Push-Location $FrontendDir
-    & npm run build | Out-Null
+    cmd.exe /c "npm run build" | Out-Null
     Pop-Location
 }
 Write-Host "  -> Builds validados com sucesso!" -ForegroundColor Green

@@ -77,6 +77,17 @@ async function main() {
   // Senha padrão "123456" para contas de teste
   const passwordHash = '$2a$08$uh9fRKO1mN3fs/pygxpPZO7fyhSb/SmO7TEl.M36O1YVyr.KkgcDO'
 
+  // Grade padrão ampla para os monitores de demonstração
+  const defaultTutorAvailability = [
+    { day: 'Segunda-feira', startTime: '08:00', endTime: '22:00' },
+    { day: 'Terça-feira', startTime: '08:00', endTime: '22:00' },
+    { day: 'Quarta-feira', startTime: '08:00', endTime: '22:00' },
+    { day: 'Quinta-feira', startTime: '08:00', endTime: '22:00' },
+    { day: 'Sexta-feira', startTime: '08:00', endTime: '22:00' },
+    { day: 'Sábado', startTime: '08:00', endTime: '20:00' },
+    { day: 'Domingo', startTime: '08:00', endTime: '20:00' },
+  ]
+
   // 1. Aluno de Demonstração
   const demoStudent = await prisma.user.upsert({
     where: { email: 'aluno@aluno.ufabc.edu.br' },
@@ -88,6 +99,7 @@ async function main() {
       cpf: '11144477735',
       passwordHash,
       role: 'STUDENT',
+      credits: 100.0,
     },
   })
 
@@ -104,8 +116,16 @@ async function main() {
       role: 'TUTOR',
       rating: 4.9,
       totalReviews: 8,
+      availability: defaultTutorAvailability,
     },
   })
+
+  if (!demoTutor.availability || (Array.isArray(demoTutor.availability) && demoTutor.availability.length === 0)) {
+    await prisma.user.update({
+      where: { id: demoTutor.id },
+      data: { availability: defaultTutorAvailability },
+    })
+  }
 
   // 3. Usuário Gabryel (Monitor)
   const gabryelUser = await prisma.user.upsert({
@@ -120,8 +140,16 @@ async function main() {
       role: 'TUTOR',
       rating: 5.0,
       totalReviews: 3,
+      availability: defaultTutorAvailability,
     },
   })
+
+  if (!gabryelUser.availability || (Array.isArray(gabryelUser.availability) && gabryelUser.availability.length === 0)) {
+    await prisma.user.update({
+      where: { id: gabryelUser.id },
+      data: { availability: defaultTutorAvailability },
+    })
+  }
 
   // 4. Usuário Rafa (Aluno)
   await prisma.user.upsert({
@@ -134,6 +162,7 @@ async function main() {
       cpf: '49063199805',
       passwordHash,
       role: 'STUDENT',
+      credits: 100.0,
     },
   })
 
