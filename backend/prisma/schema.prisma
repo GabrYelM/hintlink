@@ -42,6 +42,14 @@ enum DisputeStatus {
   RESOLVED_PAID_TUTOR
 }
 
+enum CreditTransactionType {
+  DEPOSIT
+  ESCROW_HOLD
+  ESCROW_REFUND
+  TUTORING_EARNING
+  WITHDRAWAL
+}
+
 model User {
   id           String   @id @default(uuid())
   name         String
@@ -51,19 +59,36 @@ model User {
   passwordHash String
   role         Role     @default(STUDENT)
   avatarUrl    String?
+  credits      Decimal  @default(0.00) @db.Decimal(10, 2)
+  availability Json?    // Grade de dias e horários disponíveis do monitor: [{ day, startTime, endTime }]
   rating       Float    @default(5.0)
   totalReviews Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   // Relacionamentos
-  academicRecords   AcademicRecord[]
-  requestsAsStudent TutoringRequest[] @relation("StudentRequests")
-  sessionsAsStudent TutoringSession[] @relation("StudentSessions")
-  sessionsAsTutor   TutoringSession[] @relation("TutorSessions")
-  openedTickets     DisputeTicket[]   @relation("UserOpenedTickets")
+  academicRecords    AcademicRecord[]
+  requestsAsStudent  TutoringRequest[]   @relation("StudentRequests")
+  sessionsAsStudent  TutoringSession[]   @relation("StudentSessions")
+  sessionsAsTutor    TutoringSession[]   @relation("TutorSessions")
+  openedTickets      DisputeTicket[]     @relation("UserOpenedTickets")
+  creditTransactions CreditTransaction[]
 
   @@map("users")
+}
+
+model CreditTransaction {
+  id          String                @id @default(uuid())
+  userId      String
+  type        CreditTransactionType
+  amount      Decimal               @db.Decimal(10, 2)
+  description String
+  referenceId String?
+  createdAt   DateTime              @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("credit_transactions")
 }
 
 model Subject {
@@ -102,18 +127,21 @@ model AcademicRecord {
 }
 
 model TutoringRequest {
-  id              String        @id @default(uuid())
-  studentId       String
-  subjectId       String
-  topic           String        // Ex: "Teorema Fundamental do Cálculo"
-  description     String?
-  durationMinutes Int           @default(30)
-  offeredPrice    Decimal       @db.Decimal(10, 2)
-  status          RequestStatus @default(OPEN)
-  matchQueue      String?       @default("NORMAL") // "NORMAL" ou "NOVEL"
-  rejectedTutorIds String[]     @default([])
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                  String        @id @default(uuid())
+  studentId           String
+  subjectId           String
+  topic               String        // Ex: "Teorema Fundamental do Cálculo"
+  description         String?
+  durationMinutes     Int           @default(30)
+  offeredPrice        Decimal       @db.Decimal(10, 2)
+  preferredDays       String[]      @default([]) // Ex: ["Segunda-feira", "Quarta-feira"]
+  preferredHours      String?       // Ex: "14:00 às 18:00"
+  studentAvailability Json?         // [{ day: "Segunda-feira", startTime: "14:00", endTime: "19:00" }]
+  status              RequestStatus @default(OPEN)
+  matchQueue          String?       @default("NORMAL") // "NORMAL" ou "NOVEL"
+  rejectedTutorIds    String[]      @default([])
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   student User             @relation("StudentRequests", fields: [studentId], references: [id])
   subject Subject          @relation(fields: [subjectId], references: [id])
@@ -129,6 +157,7 @@ model TutoringSession {
   tutorId         String
   status          SessionStatus @default(ACTIVE)
   startedAt       DateTime      @default(now())
+  callStartedAt   DateTime?     // Preenchido apenas quando o ALUNO inicia efetivamente a chamada de vídeo
   endedAt         DateTime?
   durationMinutes Int
   whiteboardData  Json?

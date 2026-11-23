@@ -1,5 +1,14 @@
 import { FastifyInstance } from 'fastify'
-import { authenticate, profile, register, toggleRole } from './auth.controller.js'
+import {
+  authenticate,
+  depositCredits,
+  getCredits,
+  profile,
+  register,
+  toggleRole,
+  updateAvailability,
+  withdrawCredits,
+} from './auth.controller.js'
 import { verifyJwt } from '../../shared/middlewares/verify-jwt.js'
 
 export async function authRoutes(app: FastifyInstance) {
@@ -53,5 +62,61 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     toggleRole
+  )
+
+  app.put(
+    '/me/availability',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Autenticação & Usuários'],
+        summary: 'Atualizar dias e horários de disponibilidade do monitor',
+        description: 'Salva ou altera a grade de dias e horários disponíveis do monitor no perfil.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    updateAvailability
+  )
+
+  app.get(
+    '/credits',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Carteira & Créditos'],
+        summary: 'Consultar saldo de créditos e extrato',
+        description: 'Retorna o saldo atual de créditos do usuário (Aluno ou Monitor) e o histórico de movimentações.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    getCredits
+  )
+
+  app.post(
+    '/credits/deposit',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Carteira & Créditos'],
+        summary: 'Adicionar créditos na carteira (Aluno)',
+        description: 'Permite que o aluno adicione créditos (Pix ou Cartão simulado) para pagar pelas aulas.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    depositCredits
+  )
+
+  app.post(
+    '/credits/withdraw',
+    {
+      onRequest: [verifyJwt],
+      schema: {
+        tags: ['Carteira & Créditos'],
+        summary: 'Sacar créditos recebidos via Pix (Monitor)',
+        description: 'Permite que o monitor transfira seus créditos acumulados em monitorias para sua chave Pix.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    withdrawCredits
   )
 }

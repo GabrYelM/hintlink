@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs'
 import { Role, User } from '@prisma/client'
-import { UsersRepository } from './users.repository.js'
+import { AvailabilitySlot, UsersRepository } from './users.repository.js'
 import { AppError } from '../../shared/errors/app-error.js'
 import { formatCPF, validateCPF } from '../../shared/utils/cpf-validator.js'
 
@@ -11,6 +11,7 @@ interface RegisterUserRequest {
   cpf: string
   password: string
   role: Role
+  availability?: AvailabilitySlot[]
 }
 
 interface RegisterUserResponse {
@@ -20,11 +21,26 @@ interface RegisterUserResponse {
 export class RegisterUserService {
   constructor(private usersRepository: UsersRepository) {}
 
-  async execute({ name, username, email, cpf, password, role }: RegisterUserRequest): Promise<RegisterUserResponse> {
+  async execute({
+    name,
+    username,
+    email,
+    cpf,
+    password,
+    role,
+    availability,
+  }: RegisterUserRequest): Promise<RegisterUserResponse> {
     const cleanCPF = formatCPF(cpf)
 
     if (!validateCPF(cleanCPF)) {
       throw new AppError('CPF inválido.', 400)
+    }
+
+    if (role === 'TUTOR' && (!availability || availability.length === 0)) {
+      throw new AppError(
+        'Para se cadastrar como monitor, é obrigatório informar pelo menos um dia e horário de disponibilidade.',
+        400
+      )
     }
 
     if (username) {
@@ -58,6 +74,7 @@ export class RegisterUserService {
       cpf: cleanCPF,
       passwordHash,
       role,
+      availability,
     })
 
     const { passwordHash: _, ...userWithoutPassword } = user

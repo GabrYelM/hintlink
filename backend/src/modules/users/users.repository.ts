@@ -1,5 +1,11 @@
-import { Role, User } from '@prisma/client'
+import { Prisma, Role, User } from '@prisma/client'
 import { prisma } from '../../shared/database/prisma.js'
+
+export interface AvailabilitySlot {
+  day: string
+  startTime: string
+  endTime: string
+}
 
 export interface CreateUserData {
   name: string
@@ -8,7 +14,14 @@ export interface CreateUserData {
   cpf: string
   passwordHash: string
   role: Role
+  availability?: AvailabilitySlot[]
 }
+
+const DEFAULT_DEMO_TUTOR_AVAILABILITY: AvailabilitySlot[] = [
+  { day: 'Segunda-feira', startTime: '14:00', endTime: '18:00' },
+  { day: 'Quarta-feira', startTime: '14:00', endTime: '18:00' },
+  { day: 'Sexta-feira', startTime: '19:00', endTime: '22:00' },
+]
 
 const DEMO_USERS = [
   {
@@ -28,6 +41,7 @@ const DEMO_USERS = [
     role: 'TUTOR' as Role,
     rating: 4.9,
     totalReviews: 8,
+    availability: DEFAULT_DEMO_TUTOR_AVAILABILITY as unknown as Prisma.InputJsonValue,
   },
   {
     name: 'Rafaela Santos',
@@ -46,6 +60,7 @@ const DEMO_USERS = [
     role: 'TUTOR' as Role,
     rating: 5.0,
     totalReviews: 3,
+    availability: DEFAULT_DEMO_TUTOR_AVAILABILITY as unknown as Prisma.InputJsonValue,
   },
 ]
 
@@ -124,14 +139,119 @@ export class UsersRepository {
 
   async create(data: CreateUserData): Promise<User> {
     return prisma.user.create({
-      data,
+      data: {
+        ...data,
+        availability: data.availability
+          ? (data.availability as unknown as Prisma.InputJsonValue)
+          : undefined,
+      },
     })
   }
 
-  async updateRole(id: string, role: Role): Promise<User> {
+  async updateRole(id: string, role: Role, availability?: AvailabilitySlot[]): Promise<User> {
     return prisma.user.update({
       where: { id },
-      data: { role },
+      data: {
+        role,
+        ...(availability !== undefined
+          ? { availability: availability as unknown as Prisma.InputJsonValue }
+          : {}),
+      },
+    })
+  }
+
+  async updateAvailability(id: string, availability: AvailabilitySlot[]): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        availability: availability as unknown as Prisma.InputJsonValue,
+      },
+    })
+  }
+
+  async addCredits(userId: string, amount: number, description = 'Recarga de créditos na carteira') {
+    return prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: {
+          credits: {
+            increment: amount,
+          },
+        },
+      })
+
+      const transaction = await tx.creditTransaction.create({
+        data: {
+          userId,
+          type: 'DEPOSIT',
+          amount,
+          description,
+        },
+      })
+
+      return { user: updatedUser, transaction }
+    })
+  }
+
+  async deductCreditsForEscrow(
+    userId: string,
+    amount: number,
+    description: string,
+    referenceId?: string
+  ) {
+    return prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: {
+          credits: {
+            decrement: amount,
+          },
+        },
+      })
+
+      const transaction = await tx.creditTransaction.create({
+        data: {
+          userId,
+          type: 'ESCROW_HOLD',
+          amount: -Math.abs(amount),
+          description,
+          referenceId,
+        },
+      })
+
+      return { user: updatedUser, transaction }
+    })
+  }
+
+  async withdrawCredits(userId: string, amount: number, pixKey: string) {
+    return prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: {
+          credits: {
+            decrement: amount,
+          },
+        },
+      })
+
+      const transaction = await tx.creditTransaction.create({
+        data: {
+          userId,
+          type: 'WITHDRAWAL',
+          amount: -Math.abs(amount),
+          description: `Saque Pix enviado para chave: ${pixKey}`,
+        },
+      })
+
+      return { user: updatedUser, transaction }
+    })
+  }
+
+  async listCreditTransactions(userId: string, limit = 20) {
+    return prisma.creditTransaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
     })
   }
 }

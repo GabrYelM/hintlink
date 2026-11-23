@@ -39,14 +39,46 @@ export class FinishSessionService {
         },
       })
 
-      // Libera o valor em custódia (Pix Escrow) para o monitor
+      // Libera o valor em custódia (Escrow) e transfere os créditos para a carteira do monitor
       if (session.escrow && session.escrow.status === 'HELD') {
+        const releasedAmount = Number(session.escrow.amount || 0)
+
         await tx.escrowTransaction.update({
           where: { id: session.escrow.id },
           data: {
             status: 'RELEASED_TO_TUTOR',
             releasedAt: new Date(),
           },
+        })
+
+        if (releasedAmount > 0 && tx.user?.update) {
+          await tx.user.update({
+            where: { id: session.tutorId },
+            data: {
+              credits: {
+                increment: releasedAmount,
+              },
+            },
+          })
+
+          if (tx.creditTransaction?.create) {
+            await tx.creditTransaction.create({
+              data: {
+                userId: session.tutorId,
+                type: 'TUTORING_EARNING',
+                amount: releasedAmount,
+                description: `Créditos recebidos por monitoria concluída`,
+                referenceId: sessionId,
+              },
+            })
+          }
+        }
+      }
+
+      if (session.requestId && tx.tutoringRequest?.update) {
+        await tx.tutoringRequest.update({
+          where: { id: session.requestId },
+          data: { status: 'COMPLETED' },
         })
       }
 
